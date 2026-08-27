@@ -7,15 +7,18 @@ import { useAppSettings } from '@/contexts/AppSettingsContext';
 import { api } from '@/lib/axios';
 import {
   LayoutDashboard, Building2, CalendarDays, BarChart3,
-  LogOut, Menu, X, Sun, Moon, Shield,
+  LogOut, Menu, X, Sun, Moon, Shield, Users, CalendarClock,
 } from 'lucide-react';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 
 const navItems = [
   { name: 'Dashboard', href: '/client', icon: LayoutDashboard, end: true },
+  { name: 'Security Officers', href: '/client/officers', icon: Shield },
+  { name: "Today's Dispatch", href: '/client/today', icon: CalendarClock },
+  { name: 'Dispatch Calendar', href: '/client/calendar', icon: CalendarDays },
   { name: 'Vendors', href: '/client/vendors', icon: Building2 },
-  { name: 'Schedules', href: '/client/schedules', icon: CalendarDays },
+  { name: 'Schedules', href: '/client/schedules', icon: Users },
   { name: 'Reports', href: '/client/reports', icon: BarChart3 },
 ];
 
@@ -52,7 +55,7 @@ const ClientPortalLayout = () => {
           <button
             key={item.name}
             onClick={() => { navigate(item.href); onNavigate && onNavigate(); }}
-            data-testid={`client-nav-${item.name.toLowerCase()}`}
+            data-testid={`client-nav-${item.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')}`}
             className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors ${
               active ? 'bg-[#4F46E5] text-white'
                 : 'text-[#64748B] dark:text-[#A1A1AA] hover:bg-[#F1F5F9] dark:hover:bg-[#27272A] hover:text-[#0F172A] dark:hover:text-[#FAFAFA]'

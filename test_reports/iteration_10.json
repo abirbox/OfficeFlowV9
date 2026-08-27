@@ -1,0 +1,29 @@
+{
+  "summary": "Iteration 10: Full backend + frontend verification of new Client Portal sections — Security Officers (read-only), Dispatch Calendar (CRUD), Today's Dispatch. Backend: 12 new pytest tests all pass (test_client_portal_iter10.py), covering officers/post-sites scoping, own-schedule create/update/delete, foreign post-site/officer/vendor => 400, PUT/DELETE on Globex-owned schedule => 404, admin blocked from /portal/*, client blocked from /dispatch/*, financial fields stripped. All 14 previous iter9 tests still green (26/26 total). Frontend (Playwright): acme@client.com login lands on /client; new sidebar items 'Security Officers', 'Today's Dispatch', 'Dispatch Calendar' present and clickable. Officers page lists only 'Acme Officer' (no 'Globex Officer'); View button opens client-officer-detail dialog. Calendar page loads; Add Dispatch opens client-schedule-form; sf-post-site shows only Acme sites (AC4691 Site A, AC4691b Site B), sf-officer only 'Acme Officer', sf-vendor only 'Vendor One' + 'Vendor Both' — Globex entities never appear. Creating a dispatch (2026-06-15 06:00–10:00) saves successfully (form auto-closes); Today's Dispatch page loads and its Add button opens the same schedule form. Data isolation is enforced both in UI and API layers.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_client_portal_iter10.py",
+    "/app/backend/tests/test_client_portal.py",
+    "/app/test_reports/pytest/client_portal_iter10.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "_validate_owned_refs correctly enforces all three ownership rules (post_site.client_id, officer.client_id, cid in vendor.client_ids) and is invoked on both POST and PUT — good.",
+    "PUT/DELETE first re-fetch existing and compare client_id => returns 404 (not 403), which prevents client-id enumeration. Correct.",
+    "POST forces client_id=cid server-side regardless of payload — protects against client trying to spoof client_id.",
+    "portal_create_schedule sets duty_rate/billing_rate/work_order_number to None and _strip_financial runs on the response — client can never see or set financial fields. Good.",
+    "_check_conflict runs before both create and update with exclude_id logic — 409 returned on overlap.",
+    "Minor: portal_officers and portal_post_sites are capped at 500 results; acceptable for a single client but document this if any client scales beyond 500 officers or sites.",
+    "Minor: PortalScheduleUpdate has no validator for HH:MM times unless start/end change — but _parse_hhmm is called when dirty; safe.",
+    "ClientCalendar.js: initial view starts on Week and cursor is 'new Date()' — testing showed calendar landed on Feb 2027; ensure server/client clock/tz alignment doesn't confuse users near month boundaries (cosmetic)."
+  ],
+  "updated_files": ["/app/backend/tests/test_client_portal_iter10.py"],
+  "success_rate": {"backend": "100% (12/12 new + 14/14 regression)", "frontend": "100%"},
+  "test_credentials": "Admin: admin@example.com/admin123; Client: acme@client.com/Acme@123",
+  "seed_data_creation": "Test created and cleaned up ephemeral Acme schedules dated +30d, +50d, and 2026-06-15 (UI). No permanent data left behind.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Run: pytest /app/backend/tests/test_client_portal_iter10.py /app/backend/tests/test_client_portal.py -v -o addopts=. New frontend testids to remember: client-nav-security-officers, client-nav-today-s-dispatch, client-nav-dispatch-calendar, client-officers, client-officer-view-<id>, client-officer-detail, client-calendar, client-calendar-add, client-cal-cell-<yyyy-mm-dd>, client-cal-event-<id>, client-schedule-form, sf-date/sf-shift-type/sf-start/sf-end/sf-post-site/sf-officer/sf-vendor/sf-remarks/sf-save/sf-delete, client-today, client-today-add. All 3 new sections fully client-scoped (Acme cannot see any Globex entity).",
+  "rca of the issue": "N/A — no defects."
+}

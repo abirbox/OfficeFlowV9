@@ -7,12 +7,14 @@ are never exposed here.
 """
 from fastapi import APIRouter, HTTPException, Request, Depends
 from datetime import datetime, timezone, timedelta
+from typing import Optional
+from pydantic import BaseModel
 from bson import ObjectId
 
 from utils.auth import get_current_user
 from utils.storage import to_public_url
 from utils.tz import dhaka_today_iso, dhaka_today
-from models.dispatch import COMPLETED_STATUSES
+from models.dispatch import COMPLETED_STATUSES, SHIFT_TYPES
 
 router = APIRouter(prefix="/portal", tags=["Client Portal"])
 
@@ -294,3 +296,228 @@ async def portal_reports(request: Request, db=Depends(get_db),
         "by_vendor": sorted(by_vendor.values(), key=lambda x: -x["shifts"]),
         "by_status": by_status,
     }
+
+
+# =====================================================================
+#  OFFICERS (read-only, scoped to this client)
+# =====================================================================
+@router.get("/officers")
+async def portal_officers(request: Request, db=Depends(get_db), search: str = ""):
+    user = await get_client_user(request, db)
+    cid = user["client_id"]
+    q = {"client_id": cid}
+    if search:
+        q = {"$and": [{"client_id": cid}, {"$or": [
+            {"name": {"$regex": search, "$options": "i"}},
+            {"officer_code": {"$regex": search, "$options": "i"}},
+            {"contact_number": {"$regex": search, "$options": "i"}},
+        ]}]}
+    docs = await db.dispatch_officers.find(q).sort("name", 1).limit(500).to_list(500)
+    out = []
+    for d in docs:
+        row = _doc_out(d)
+        if row.get("profile_image"):
+            row["profile_image_url"] = to_public_url(row["profile_image"])
+        out.append(row)
+    return out
+
+
+@router.get("/post-sites")
+async def portal_post_sites(request: Request, db=Depends(get_db)):
+    user = await get_client_user(request, db)
+    cid = user["client_id"]
+    docs = await db.dispatch_post_sites.find({"client_id": cid}).sort("name", 1).limit(500).to_list(500)
+    return [_doc_out(d) for d in docs]
+
+
+# =====================================================================
+#  SCHEDULE CRUD (client-scoped). A client may only add/edit/delete
+#  dispatches for their OWN post sites, officers and vendors.
+# =====================================================================
+class PortalScheduleCreate(BaseModel):
+    date: str
+    shift_type: str
+    start_time: str
+    end_time: str
+    post_site_id: str
+    officer_id: str
+    vendor_id: str
+    remarks: Optional[str] = None
+
+
+class PortalScheduleUpdate(BaseModel):
+    date: Optional[str] = None
+    shift_type: Optional[str] = None
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    post_site_id: Optional[str] = None
+    officer_id: Optional[str] = None
+    vendor_id: Optional[str] = None
+    remarks: Optional[str] = None
+
+
+def _parse_hhmm(s: str) -> int:
+    try:
+        h, m = str(s).split(":")
+        h, m = int(h), int(m)
+        if not (0 <= h < 24 and 0 <= m < 60):
+            raise ValueError()
+        return h * 60 + m
+    except Exception:
+        raise HTTPException(400, f"Invalid time '{s}', expected HH:MM")
+
+
+def _duty_hours(start: str, end: str):
+    s = _parse_hhmm(start)
+    e = _parse_hhmm(end)
+    if e <= s:
+        e += 24 * 60
+    return round((e - s) / 60.0, 2)
+
+
+def _now():
+    return datetime.now(timezone.utc)
+
+
+async def _validate_owned_refs(db, cid, post_site_id, officer_id, vendor_id):
+    """Ensure the post site + officer belong to this client and the vendor
+    serves this client. Returns nothing; raises 400 on any violation."""
+    post = await db.dispatch_post_sites.find_one({"_id": _oid(post_site_id)})
+    if not post or str(post.get("client_id") or "") != str(cid):
+        raise HTTPException(400, "Post site does not belong to your account")
+    officer = await db.dispatch_officers.find_one({"_id": _oid(officer_id)})
+    if not officer or str(officer.get("client_id") or "") != str(cid):
+        raise HTTPException(400, "Officer does not belong to your account")
+    vendor = await db.dispatch_vendors.find_one({"_id": _oid(vendor_id)})
+    if not vendor or cid not in (vendor.get("client_ids") or []):
+        raise HTTPException(400, "Vendor is not assigned to your account")
+
+
+async def _check_conflict(db, officer_id, sched_date, start, end, exclude_id=None):
+    s = _parse_hhmm(start)
+    e = _parse_hhmm(end)
+    if e <= s:
+        e += 24 * 60
+    q = {"officer_id": officer_id, "date": sched_date}
+    if exclude_id:
+        q["_id"] = {"$ne": _oid(exclude_id)}
+    for ex in await db.dispatch_schedules.find(q).to_list(500):
+        xs = _parse_hhmm(ex["start_time"])
+        xe = _parse_hhmm(ex["end_time"])
+        if xe <= xs:
+            xe += 24 * 60
+        if s < xe and xs < e:
+            return ex
+    return None
+
+
+async def _portal_audit(db, user, action, sid, name):
+    """Lightweight audit entry so admins can see client-made changes."""
+    try:
+        await db.dispatch_audit.insert_one({
+            "action": action, "entity_type": "schedule",
+            "entity_id": str(sid) if sid else None, "entity_name": name,
+            "changes": None, "actor_id": str(user.get("_id")),
+            "actor_name": user.get("name"), "actor_role": "client",
+            "at": _now(),
+        })
+    except Exception:
+        pass
+
+
+@router.post("/schedules")
+async def portal_create_schedule(payload: PortalScheduleCreate, request: Request, db=Depends(get_db)):
+    user = await get_client_user(request, db)
+    cid = user["client_id"]
+    if payload.shift_type not in SHIFT_TYPES:
+        raise HTTPException(400, f"Shift type must be one of {SHIFT_TYPES}")
+    await _validate_owned_refs(db, cid, payload.post_site_id, payload.officer_id, payload.vendor_id)
+
+    conflict = await _check_conflict(db, payload.officer_id, payload.date,
+                                     payload.start_time, payload.end_time)
+    if conflict:
+        raise HTTPException(409, f"Officer already has a shift on {conflict['date']} "
+                                 f"{conflict['start_time']}–{conflict['end_time']}.")
+
+    now = _now()
+    doc = {
+        "date": payload.date,
+        "shift_type": payload.shift_type,
+        "start_time": payload.start_time,
+        "end_time": payload.end_time,
+        "client_id": cid,  # forced to this client — never trust client input
+        "vendor_id": payload.vendor_id,
+        "post_site_id": payload.post_site_id,
+        "officer_id": payload.officer_id,
+        "remarks": payload.remarks,
+        "duty_hours": _duty_hours(payload.start_time, payload.end_time),
+        "duty_rate": None, "billing_rate": None, "work_order_number": None,
+        "shift_status": "Not Started",
+        "confirmation_status": "Not Confirmed",
+        "confirmation_method": None,
+        "confirmed_by_id": None, "confirmed_by_name": None, "confirmed_at": None,
+        "actual_check_in": None, "actual_check_out": None, "actual_duty_hours": None,
+        "late_minutes": 0, "early_minutes": 0, "overtime_minutes": 0,
+        "created_by": str(user["_id"]), "created_at": now,
+        "updated_by": str(user["_id"]), "updated_at": now,
+        "last_modified_by_id": str(user["_id"]),
+        "last_modified_by_name": user.get("name"),
+        "last_modified_action": "Created (Client Portal)",
+        "last_modified_at": now,
+    }
+    res = await db.dispatch_schedules.insert_one(doc)
+    await _portal_audit(db, user, "create", res.inserted_id, f"{doc['date']} {doc['shift_type']}")
+    return _strip_financial(_doc_out(await db.dispatch_schedules.find_one({"_id": res.inserted_id})))
+
+
+@router.put("/schedules/{sid}")
+async def portal_update_schedule(sid: str, payload: PortalScheduleUpdate, request: Request, db=Depends(get_db)):
+    user = await get_client_user(request, db)
+    cid = user["client_id"]
+    existing = await db.dispatch_schedules.find_one({"_id": _oid(sid)})
+    if not existing or str(existing.get("client_id") or "") != str(cid):
+        raise HTTPException(404, "Schedule not found")
+
+    upd = payload.model_dump(exclude_unset=True)
+    upd.pop("client_id", None)  # client can never move a schedule to another client
+
+    if "shift_type" in upd and upd["shift_type"] not in SHIFT_TYPES:
+        raise HTTPException(400, f"Shift type must be one of {SHIFT_TYPES}")
+
+    post_site_id = upd.get("post_site_id", existing.get("post_site_id"))
+    officer_id = upd.get("officer_id", existing.get("officer_id"))
+    vendor_id = upd.get("vendor_id", existing.get("vendor_id"))
+    await _validate_owned_refs(db, cid, post_site_id, officer_id, vendor_id)
+
+    st = upd.get("start_time", existing["start_time"])
+    et = upd.get("end_time", existing["end_time"])
+    if "start_time" in upd or "end_time" in upd:
+        upd["duty_hours"] = _duty_hours(st, et)
+
+    if any(k in upd for k in ("officer_id", "date", "start_time", "end_time")):
+        conflict = await _check_conflict(db, officer_id, upd.get("date", existing["date"]),
+                                         st, et, exclude_id=sid)
+        if conflict:
+            raise HTTPException(409, f"Officer already has a shift on {conflict['date']} "
+                                     f"{conflict['start_time']}–{conflict['end_time']}.")
+
+    upd["updated_by"] = str(user["_id"])
+    upd["updated_at"] = _now()
+    upd["last_modified_by_name"] = user.get("name")
+    upd["last_modified_action"] = "Edited (Client Portal)"
+    upd["last_modified_at"] = _now()
+    await db.dispatch_schedules.update_one({"_id": _oid(sid)}, {"$set": upd})
+    await _portal_audit(db, user, "update", sid, f"{existing.get('date')} {existing.get('shift_type')}")
+    return _strip_financial(_doc_out(await db.dispatch_schedules.find_one({"_id": _oid(sid)})))
+
+
+@router.delete("/schedules/{sid}")
+async def portal_delete_schedule(sid: str, request: Request, db=Depends(get_db)):
+    user = await get_client_user(request, db)
+    cid = user["client_id"]
+    existing = await db.dispatch_schedules.find_one({"_id": _oid(sid)})
+    if not existing or str(existing.get("client_id") or "") != str(cid):
+        raise HTTPException(404, "Schedule not found")
+    await db.dispatch_schedules.delete_one({"_id": _oid(sid)})
+    await _portal_audit(db, user, "delete", sid, f"{existing.get('date')} {existing.get('shift_type')}")
+    return {"message": "Schedule deleted"}
