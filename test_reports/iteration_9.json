@@ -1,0 +1,24 @@
+{
+  "summary": "Iteration 9: Verified new Client Dashboard summary cards (Officer Check-ins Today, Active Post Sites, Payslip Summary 7 days) and extended /api/portal/summary. Backend: 14/14 pytest tests pass including 2 new tests asserting exact scoped values (checkins_today=1, active_post_sites=1, payslip_7d.total=80.0, shifts=1, officers=1) and Globex non-leak isolation. Frontend: acme@client.com login lands on /client, all 3 new StatCards render with the expected data-testids and values (৳80.00 with subtext '1 shifts · 1 officers'). Existing cards (Total/Upcoming Schedules, Completed Shifts, Vendors, Officers, Post Sites) still render. Admin login unaffected; admin still 403 on /portal/*, client still 403 on /dispatch/*.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_client_portal.py",
+    "/app/test_reports/pytest/client_portal_iter9.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "portal_summary(): uses COMPLETED_STATUSES for checkins_today which aligns with 'Clocked In' + 'Clocked Out' per problem statement. Good.",
+    "payslip 7-day window uses Dhaka-local dates (dhaka_today - 6 days .. today inclusive) — 7 calendar days, correct.",
+    "SPECIAL_OFFICERS ({'TEMP','OPEN_SHIFT'}) excluded from officer count in payslip — good defensive handling.",
+    "to_list(10000) hard cap on week schedules — acceptable for weekly window; document if a single client is ever expected to exceed 10k shifts/week."
+  ],
+  "updated_files": ["/app/backend/tests/test_client_portal.py"],
+  "success_rate": {"backend": "100% (14/14)", "frontend": "100%"},
+  "test_credentials": "Admin: admin@example.com/admin123; Client: acme@client.com/Acme@123",
+  "seed_data_creation": "Used existing seed (Acme officer clocked-in today 8h@rate10 => 80; 1 active + 1 inactive Acme post sites; Globex officer @rate99 + Globex active post site).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "New tests added: test_portal_summary_new_cards_scoped_to_acme and test_portal_summary_isolation_globex_not_leaking. Frontend data-testids for new cards: stat-officer-check-ins-today, stat-active-post-sites, stat-payslip-summary-7-days. Run: pytest /app/backend/tests/test_client_portal.py -v -o addopts=",
+  "rca of the issue": "N/A — no defects found."
+}

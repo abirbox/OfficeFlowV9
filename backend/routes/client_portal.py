@@ -6,18 +6,28 @@ see another client's data. Financial fields (duty/billing rate, work orders)
 are never exposed here.
 """
 from fastapi import APIRouter, HTTPException, Request, Depends
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from bson import ObjectId
 
 from utils.auth import get_current_user
 from utils.storage import to_public_url
-from utils.tz import dhaka_today_iso
+from utils.tz import dhaka_today_iso, dhaka_today
 from models.dispatch import COMPLETED_STATUSES
 
 router = APIRouter(prefix="/portal", tags=["Client Portal"])
 
 # Never expose these to a client
 FINANCIAL_FIELDS = ("duty_rate", "billing_rate", "work_order_number")
+
+# Scheduling placeholders that are not real officers
+SPECIAL_OFFICERS = {"TEMP", "OPEN_SHIFT"}
+
+
+def _amt(v):
+    try:
+        return round(float(v or 0), 2)
+    except Exception:
+        return 0.0
 
 
 def get_db(request: Request):
@@ -93,6 +103,31 @@ async def portal_summary(request: Request, db=Depends(get_db)):
     officers = await db.dispatch_officers.count_documents({"client_id": cid})
     post_sites = await db.dispatch_post_sites.count_documents({"client_id": cid})
 
+    # Officer check-ins today: this client's schedules dated today where the
+    # officer has clocked in (Clocked In / Clocked Out both count as checked-in).
+    checkins_today = await db.dispatch_schedules.count_documents(
+        {"client_id": cid, "date": today, "shift_status": {"$in": COMPLETED_STATUSES}}
+    )
+
+    # Active post sites linked to this client.
+    active_post_sites = await db.dispatch_post_sites.count_documents(
+        {"client_id": cid, "status": "active"}
+    )
+
+    # 7-day payslip summary for officers assigned to this client: total earnings
+    # (duty_hours × duty_rate) across this client's schedules over the last 7 days.
+    week_from = (dhaka_today() - timedelta(days=6)).isoformat()
+    week_scheds = await db.dispatch_schedules.find(
+        {"client_id": cid, "date": {"$gte": week_from, "$lte": today}}
+    ).to_list(10000)
+    payslip_total = 0.0
+    officer_ids = set()
+    for s in week_scheds:
+        payslip_total += _amt(s.get("duty_hours")) * _amt(s.get("duty_rate"))
+        oid = s.get("officer_id")
+        if oid and oid not in SPECIAL_OFFICERS:
+            officer_ids.add(str(oid))
+
     return {
         "total_schedules": total_schedules,
         "upcoming_schedules": upcoming,
@@ -100,6 +135,15 @@ async def portal_summary(request: Request, db=Depends(get_db)):
         "vendors": vendors,
         "officers": officers,
         "post_sites": post_sites,
+        "checkins_today": checkins_today,
+        "active_post_sites": active_post_sites,
+        "payslip_7d": {
+            "from": week_from,
+            "to": today,
+            "total": round(payslip_total, 2),
+            "officers": len(officer_ids),
+            "shifts": len(week_scheds),
+        },
     }
 
 

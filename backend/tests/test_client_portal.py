@@ -162,10 +162,45 @@ def test_portal_summary(client_session):
     assert r.status_code == 200
     body = r.json()
     for k in ("total_schedules", "upcoming_schedules", "completed_schedules",
-              "vendors", "officers", "post_sites"):
-        assert k in body
+              "vendors", "officers", "post_sites",
+              "checkins_today", "active_post_sites", "payslip_7d"):
+        assert k in body, f"Missing {k} in summary: {body}"
     # Acme is linked to Vendor One + Vendor Both = 2 vendors
     assert body["vendors"] >= 2
+
+
+# ---------- New: dashboard summary cards (iteration 9) ----------
+def test_portal_summary_new_cards_scoped_to_acme(client_session):
+    r = client_session.get(f"{API}/portal/summary", timeout=30)
+    assert r.status_code == 200
+    body = r.json()
+    # Seeded expected values for Acme Corp
+    assert body["checkins_today"] == 1, f"checkins_today expected 1, got {body['checkins_today']}"
+    assert body["active_post_sites"] == 1, f"active_post_sites expected 1, got {body['active_post_sites']}"
+    ps = body["payslip_7d"]
+    assert isinstance(ps, dict)
+    for k in ("total", "officers", "shifts", "from", "to"):
+        assert k in ps, f"Missing payslip_7d.{k}"
+    assert ps["total"] == 80.0, f"payslip_7d.total expected 80.0, got {ps['total']}"
+    assert ps["shifts"] == 1
+    assert ps["officers"] == 1
+    # Data isolation: Globex officer rate 99 must NOT leak. 80 is the only valid Acme total.
+    assert ps["total"] != 99.0 * 8 and ps["total"] < 800
+
+
+def test_portal_summary_isolation_globex_not_leaking(admin_session, client_session):
+    # Verify that Globex has its own clocked-in officer today via admin API,
+    # and Acme summary still reads 1/1/80.
+    r = admin_session.get(f"{API}/dispatch/clients?limit=200", timeout=30)
+    clients = r.json()
+    globex_id = next((c["id"] for c in clients if c["name"] == "Globex Ltd"), None)
+    assert globex_id, "Globex Ltd seed missing"
+    # Just re-fetch Acme portal summary and assert stable Acme-only numbers
+    r = client_session.get(f"{API}/portal/summary", timeout=30)
+    body = r.json()
+    assert body["checkins_today"] == 1
+    assert body["active_post_sites"] == 1
+    assert body["payslip_7d"]["total"] == 80.0
 
 
 def test_portal_vendors_isolation(client_session):
