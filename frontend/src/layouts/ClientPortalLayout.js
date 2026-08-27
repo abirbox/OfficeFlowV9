@@ -7,7 +7,7 @@ import { useAppSettings } from '@/contexts/AppSettingsContext';
 import { api } from '@/lib/axios';
 import {
   LayoutDashboard, Building2, CalendarDays, BarChart3,
-  LogOut, Menu, X, Sun, Moon, Shield, Users, CalendarClock,
+  LogOut, Menu, X, Sun, Moon, Shield, Users, CalendarClock, DollarSign, Wallet,
 } from 'lucide-react';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
@@ -19,6 +19,8 @@ const navItems = [
   { name: 'Dispatch Calendar', href: '/client/calendar', icon: CalendarDays },
   { name: 'Vendors', href: '/client/vendors', icon: Building2 },
   { name: 'Schedules', href: '/client/schedules', icon: Users },
+  { name: 'Payment SO', href: '/client/payments', icon: DollarSign },
+  { name: 'Wage Report', href: '/client/wage-report', icon: Wallet },
   { name: 'Reports', href: '/client/reports', icon: BarChart3 },
 ];
 

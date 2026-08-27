@@ -44,6 +44,8 @@ import ClientReports from "@/pages/client/ClientReports";
 import ClientOfficers from "@/pages/client/ClientOfficers";
 import ClientCalendar from "@/pages/client/ClientCalendar";
 import ClientToday from "@/pages/client/ClientToday";
+import ClientPaymentSO from "@/pages/client/ClientPaymentSO";
+import ClientWageReport from "@/pages/client/ClientWageReport";
 import "@/App.css";
 
 function App() {
@@ -119,6 +121,8 @@ function App() {
             <Route path="calendar" element={<ClientCalendar />} />
             <Route path="vendors" element={<ClientVendors />} />
             <Route path="schedules" element={<ClientSchedules />} />
+            <Route path="payments" element={<ClientPaymentSO />} />
+            <Route path="wage-report" element={<ClientWageReport />} />
             <Route path="reports" element={<ClientReports />} />
           </Route>
 

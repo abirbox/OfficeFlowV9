@@ -6,10 +6,12 @@ see another client's data. Financial fields (duty/billing rate, work orders)
 are never exposed here.
 """
 from fastapi import APIRouter, HTTPException, Request, Depends
+from fastapi.responses import StreamingResponse
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 from pydantic import BaseModel
 from bson import ObjectId
+import io
 
 from utils.auth import get_current_user
 from utils.storage import to_public_url
@@ -521,3 +523,199 @@ async def portal_delete_schedule(sid: str, request: Request, db=Depends(get_db))
     await db.dispatch_schedules.delete_one({"_id": _oid(sid)})
     await _portal_audit(db, user, "delete", sid, f"{existing.get('date')} {existing.get('shift_type')}")
     return {"message": "Schedule deleted"}
+
+
+def _month_bounds():
+    t = dhaka_today()
+    first = t.replace(day=1).isoformat()
+    if t.month == 12:
+        nxt = t.replace(year=t.year + 1, month=1, day=1)
+    else:
+        nxt = t.replace(month=t.month + 1, day=1)
+    last = (nxt - timedelta(days=1)).isoformat()
+    return first, last
+
+
+async def _own_officer(db, cid, officer_id):
+    """Return the officer doc if it belongs to this client, else 404."""
+    officer = await db.dispatch_officers.find_one({"_id": _oid(officer_id)})
+    if not officer or str(officer.get("client_id") or "") != str(cid):
+        raise HTTPException(404, "Officer not found")
+    return officer
+
+
+# =====================================================================
+#  WAGE REPORT (scoped to this client's officers)
+# =====================================================================
+@router.get("/wage-report")
+async def portal_wage_report(request: Request, db=Depends(get_db),
+                             date_from: str = None, date_to: str = None):
+    user = await get_client_user(request, db)
+    cid = user["client_id"]
+    if not date_from or not date_to:
+        date_from, date_to = _month_bounds()
+
+    completed_cond = {"$in": ["$shift_status", COMPLETED_STATUSES]}
+    pipeline = [
+        {"$match": {"client_id": cid, "date": {"$gte": date_from, "$lte": date_to}}},
+        {"$group": {
+            "_id": "$officer_id",
+            "total_shifts": {"$sum": 1},
+            "completed": {"$sum": {"$cond": [completed_cond, 1, 0]}},
+            "total_hours": {"$sum": {"$cond": [completed_cond, {"$ifNull": ["$duty_hours", 0]}, 0]}},
+            "wage": {"$sum": {"$cond": [completed_cond,
+                     {"$multiply": [{"$ifNull": ["$duty_hours", 0]}, {"$ifNull": ["$duty_rate", 0]}]}, 0]}},
+        }},
+        {"$sort": {"wage": -1}},
+    ]
+    rows = await db.dispatch_schedules.aggregate(pipeline).to_list(2000)
+    out = []
+    total_hours = 0.0
+    total_wage = 0.0
+    for r in rows:
+        oid = r.pop("_id")
+        if not oid or oid in SPECIAL_OFFICERS:
+            continue
+        officer = await db.dispatch_officers.find_one({"_id": _oid(oid)}, {"name": 1, "officer_code": 1})
+        r["officer_id"] = oid
+        r["officer_name"] = officer.get("name") if officer else "—"
+        r["officer_code"] = officer.get("officer_code") if officer else None
+        r["total_hours"] = round(r.get("total_hours", 0), 2)
+        r["wage"] = round(r.get("wage", 0), 2)
+        total_hours += r["total_hours"]
+        total_wage += r["wage"]
+        out.append(r)
+    return {
+        "items": out,
+        "date_from": date_from, "date_to": date_to,
+        "totals": {"hours": round(total_hours, 2), "wage": round(total_wage, 2), "officers": len(out)},
+    }
+
+
+@router.get("/officers/{officer_id}/payslip")
+async def portal_officer_payslip(officer_id: str, request: Request, db=Depends(get_db),
+                                 date_from: str = None, date_to: str = None,
+                                 format: str = "pdf"):
+    user = await get_client_user(request, db)
+    cid = user["client_id"]
+    officer = await _own_officer(db, cid, officer_id)
+    if not date_from or not date_to:
+        date_from, date_to = _month_bounds()
+
+    client = await db.dispatch_clients.find_one({"_id": _oid(cid)})
+    scheds = await db.dispatch_schedules.find(
+        {"client_id": cid, "officer_id": officer_id, "date": {"$gte": date_from, "$lte": date_to}}
+    ).sort([("date", 1), ("start_time", 1)]).to_list(3000)
+
+    # Resolve post site names
+    post_ids = {s.get("post_site_id") for s in scheds if s.get("post_site_id")}
+    posts_map = {}
+    if post_ids:
+        obj_ids = [ObjectId(i) for i in post_ids if ObjectId.is_valid(i)]
+        pdocs = await db.dispatch_post_sites.find({"_id": {"$in": obj_ids}}, {"name": 1, "post_pin": 1}).to_list(len(obj_ids))
+        posts_map = {str(p["_id"]): p for p in pdocs}
+
+    rows = []
+    total_hours = 0.0
+    total_amount = 0.0
+    for s in scheds:
+        is_complete = s.get("shift_status") in COMPLETED_STATUSES
+        hours = _amt(s.get("duty_hours")) if is_complete else 0.0
+        rate = _amt(s.get("duty_rate"))
+        amount = round(hours * rate, 2)
+        total_hours += hours
+        total_amount += amount
+        p = posts_map.get(str(s.get("post_site_id")), {})
+        rows.append({
+            "date": s.get("date"),
+            "post_site": f"{p.get('post_pin', '')} {p.get('name', '')}".strip() or "—",
+            "shift_type": s.get("shift_type"),
+            "hours": hours,
+            "rate": rate,
+            "amount": amount,
+        })
+    rows.append({"date": "", "post_site": "", "shift_type": "TOTAL",
+                 "hours": round(total_hours, 2), "rate": "", "amount": round(total_amount, 2)})
+
+    columns = [
+        {"key": "date", "label": "Date"},
+        {"key": "post_site", "label": "Post Site"},
+        {"key": "shift_type", "label": "Shift"},
+        {"key": "hours", "label": "Hours"},
+        {"key": "rate", "label": "Rate"},
+        {"key": "amount", "label": "Amount"},
+    ]
+    title = f"Payslip — {officer.get('name')} ({officer.get('officer_code') or ''})"
+    subtitle = f"{(client or {}).get('name', 'Client')}  |  {date_from} to {date_to}"
+
+    fmt = (format or "pdf").lower()
+    safe = (officer.get("name") or "officer").replace(" ", "-")
+    if fmt == "xlsx":
+        from utils.dispatch_reports import build_xlsx
+        data = build_xlsx(rows, columns, title=title)
+        return StreamingResponse(io.BytesIO(data),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="Payslip-{safe}.xlsx"'})
+    from utils.dispatch_reports import build_pdf
+    data = build_pdf(title, subtitle, rows, columns)
+    return StreamingResponse(io.BytesIO(data), media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="Payslip-{safe}.pdf"'})
+
+
+# =====================================================================
+#  PAYMENT (SO) — records for this client's officers (view + export)
+# =====================================================================
+@router.get("/payments")
+async def portal_payments(request: Request, db=Depends(get_db),
+                          search: str = None, date_from: str = None, date_to: str = None):
+    user = await get_client_user(request, db)
+    from routes.so_payments import _client_context
+    return await _client_context(db, user["client_id"], search, date_from, date_to)
+
+
+@router.get("/payments/officer/{officer_id}")
+async def portal_payments_officer(officer_id: str, request: Request, db=Depends(get_db),
+                                  date_from: str = None, date_to: str = None):
+    user = await get_client_user(request, db)
+    await _own_officer(db, user["client_id"], officer_id)
+    from routes.so_payments import _officer_context
+    return await _officer_context(db, officer_id, date_from, date_to)
+
+
+@router.get("/payments/report/{fmt}")
+async def portal_payments_report(fmt: str, request: Request, db=Depends(get_db),
+                                 search: str = None, date_from: str = None, date_to: str = None):
+    user = await get_client_user(request, db)
+    from routes.so_payments import _client_context
+    ctx = await _client_context(db, user["client_id"], search, date_from, date_to)
+    name = (ctx["client"].get("name") or "client").replace(" ", "-")
+    if fmt == "xlsx":
+        from utils.dispatch_reports import build_client_payment_records_xlsx
+        data = build_client_payment_records_xlsx(ctx=ctx)
+        return StreamingResponse(io.BytesIO(data),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="Payment-{name}.xlsx"'})
+    from utils.dispatch_reports import build_client_payment_records_pdf
+    data = build_client_payment_records_pdf(ctx=ctx)
+    return StreamingResponse(io.BytesIO(data), media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="Payment-{name}.pdf"'})
+
+
+@router.get("/payments/officer/{officer_id}/report/{fmt}")
+async def portal_payments_officer_report(officer_id: str, fmt: str, request: Request, db=Depends(get_db),
+                                         date_from: str = None, date_to: str = None):
+    user = await get_client_user(request, db)
+    await _own_officer(db, user["client_id"], officer_id)
+    from routes.so_payments import _officer_context
+    ctx = await _officer_context(db, officer_id, date_from, date_to)
+    name = (ctx["officer"].get("name") or "officer").replace(" ", "-")
+    if fmt == "xlsx":
+        from utils.dispatch_reports import build_officer_payment_records_xlsx
+        data = build_officer_payment_records_xlsx(ctx=ctx)
+        return StreamingResponse(io.BytesIO(data),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="Payment-{name}.xlsx"'})
+    from utils.dispatch_reports import build_officer_payment_records_pdf
+    data = build_officer_payment_records_pdf(ctx=ctx)
+    return StreamingResponse(io.BytesIO(data), media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="Payment-{name}.pdf"'})
