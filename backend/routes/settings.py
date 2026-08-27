@@ -3,9 +3,11 @@ from datetime import datetime, timezone
 
 from models.settings import (
     AppSettings, AppSettingsUpdate, CURRENCY_DIRECTORY, TIMEZONE_DIRECTORY,
+    EmailSettingsUpdate,
 )
 from utils.auth import get_current_user
 from utils.storage import put_object, generate_upload_path, to_public_url
+from utils.smtp import SMTP_KEY, encrypt_secret, get_smtp_doc
 
 router = APIRouter(prefix="/settings", tags=["App Settings"])
 
@@ -116,6 +118,53 @@ async def upload_favicon(file: UploadFile, request: Request, db=Depends(get_db))
         upsert=True,
     )
     return {"favicon_url": fav_url}
+
+
+# ---------------------------------------------------------------------------
+# Email (SMTP) settings — used by the forgot-password flow.
+# Password is stored encrypted and is NEVER returned to the client.
+# ---------------------------------------------------------------------------
+@router.get("/email")
+async def get_email_settings(request: Request, db=Depends(get_db)):
+    await require_admin(request, db)
+    doc = await get_smtp_doc(db) or {}
+    return {
+        "smtp_host": doc.get("host", ""),
+        "smtp_port": doc.get("port", 587),
+        "username": doc.get("username", ""),
+        "from_email": doc.get("from_email", ""),
+        "has_password": bool(doc.get("password_enc")),
+    }
+
+
+@router.put("/email")
+async def update_email_settings(payload: EmailSettingsUpdate, request: Request, db=Depends(get_db)):
+    await require_admin(request, db)
+    existing = await get_smtp_doc(db)
+    update = {
+        "key": SMTP_KEY,
+        "host": (payload.smtp_host or "").strip(),
+        "port": int(payload.smtp_port or 587),
+        "username": (payload.username or "").strip(),
+        "from_email": (payload.from_email or "").strip(),
+        "updated_at": datetime.now(timezone.utc),
+    }
+    # Password: only overwrite when a new one is supplied; blank keeps current.
+    if payload.password:
+        update["password_enc"] = encrypt_secret(payload.password)
+    await db.app_settings.update_one(
+        {"key": SMTP_KEY},
+        {"$set": update, "$setOnInsert": {"created_at": datetime.now(timezone.utc)}},
+        upsert=True,
+    )
+    doc = await get_smtp_doc(db) or {}
+    return {
+        "smtp_host": doc.get("host", ""),
+        "smtp_port": doc.get("port", 587),
+        "username": doc.get("username", ""),
+        "from_email": doc.get("from_email", ""),
+        "has_password": bool(doc.get("password_enc")),
+    }
 
 
 @router.get("/currencies")

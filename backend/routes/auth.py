@@ -246,11 +246,19 @@ async def forgot_password(data: ForgotPasswordRequest, db = Depends(get_db)):
     })
     
     reset_link = f"{os.environ.get('FRONTEND_URL')}/reset-password?token={token}"
+
+    # Use the SMTP credentials saved in admin Settings → Email Settings.
+    # NOTE: dry_run=True for now — this prepares the email using the saved
+    # credentials but does NOT send anything yet.
+    from utils.smtp import send_password_reset_email
+    result = await send_password_reset_email(db, recipient=email_lower, reset_link=reset_link, dry_run=True)
+
     print(f"\n=== PASSWORD RESET LINK ===")
     print(f"Email: {email_lower}")
     print(f"Reset Link: {reset_link}")
+    print(f"SMTP status: {result}")
     print(f"==========================\n")
-    
+
     return {"message": "If the email exists, a reset link has been sent"}
 
 @router.post("/reset-password")

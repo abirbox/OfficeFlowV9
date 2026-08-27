@@ -44,6 +44,14 @@ class AppSettingsUpdate(BaseModel):
     not_found_lottie_url: Optional[str] = None
 
 
+class EmailSettingsUpdate(BaseModel):
+    smtp_host: Optional[str] = None
+    smtp_port: Optional[int] = None
+    username: Optional[str] = None
+    password: Optional[str] = None  # blank/omitted = keep existing
+    from_email: Optional[str] = None
+
+
 # ISO-4217 currency directory
 CURRENCY_DIRECTORY = {
     "BDT": {"symbol": "৳", "name": "Bangladeshi Taka"},
