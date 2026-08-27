@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { api, formatApiErrorDetail } from '@/lib/axios';
+import { formatApiErrorDetail } from '@/lib/axios';
+import { useScopedApi } from '@/lib/scopedApi';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -42,6 +43,7 @@ function endOfMonth(d) {
 }
 
 const DispatchCalendarPage = () => {
+  const api = useScopedApi();
   const { user } = useAuthStore();
   const canView = hasPermission(user, 'dispatch.schedule.view');
 

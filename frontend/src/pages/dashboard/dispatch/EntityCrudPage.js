@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { api, formatApiErrorDetail } from '@/lib/axios';
+import { formatApiErrorDetail } from '@/lib/axios';
+import { useScopedApi } from '@/lib/scopedApi';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -20,6 +21,7 @@ import { STATUS_BADGE } from './_shared';
  *   props.statuses — [{value,label}]  optional; default active/inactive
  */
 const EntityCrudPage = ({ title, endpoint, permBase, fields, columns, statuses, filters = [], rowActions }) => {
+  const api = useScopedApi();
   const { user } = useAuthStore();
   const canCreate = hasPermission(user, `${permBase}.create`);
   const canEdit = hasPermission(user, `${permBase}.edit`);

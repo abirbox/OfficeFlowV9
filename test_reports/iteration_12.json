@@ -1,0 +1,34 @@
+{
+  "summary": "Iteration 12: Full backend + frontend verification of the Client Portal now MIRRORING the admin Dispatch section via a scoped API. New pytest file test_client_portal_iter12.py (12 cases — ALL PASS) exercises /api/portal/dispatch/* client-scoped wrappers: role gates (client 403 on all /api/dispatch/*, admin 403 on all /portal/dispatch/*); client permissions include 19 dispatch.* perms; reference lists (clients/vendors/officers/post-sites) return only Acme-scoped data with no Globex leakage; officer CRUD via portal auto-scopes to client and prefixes officer_code with ACM, foreign officer edit/delete → 404; schedules full lifecycle over /portal/dispatch/schedules → create/list/status(Clocked In)/confirm(Call)/actions/update remarks/delete all 200 with financial fields (duty_rate/billing_rate/work_order_number) STRIPPED from responses; creating a schedule with foreign (Globex) post_site_id → 400; foreign schedule GET/PUT/DELETE → 404; admin /dispatch/* still 200 (regression). Combined regression run of test_client_portal.py + test_client_portal_iter10.py + test_client_portal_iter11.py + test_client_portal_iter12.py = 52/52 PASS. Frontend (Playwright, 1920×1080, real login acme@client.com/Acme@123): sidebar exposes the 10 new client-nav-* testids (dashboard, today-s-dispatch, dispatch-schedule, dispatch-calendar, security-officers, post-sites, vendors, payment-so, wage-report, reports) — every tab loads without errors. Security Officers page renders 1 Acme row (ACM500680 / Acme Officer / Unarmed / active), the 'All Client' filter dropdown lists only 'Acme Corp' (no Globex), and 'Add Security Officer' modal renders with 12 fields incl. Client/Type/Status. Dispatch Schedule shows only Acme rows (0 Globex), 'New Schedule' modal renders correctly with client-scoped searchable client/vendor/post-site/officer selectors and Save button. Dispatch Calendar week view renders the Acme shift on 27 Aug 2026 with filters (All Clients/Vendors/Officers/Post Pins). Today's Dispatch and Post Sites tabs render with 0 Globex hits. Data isolation is enforced at both API and UI layers.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": [
+    {"screen": "Client Portal / New Dispatch Schedule modal", "issues": ["Uses browser's default HTML5 date/time inputs (<input type=date/time>) instead of a shadcn Calendar/Time component. This is the same behaviour as the admin Dispatch page (component is REUSED), so it is a shared/pre-existing decision, not a regression introduced in this iteration."]}
+  ]},
+  "test_report_links": [
+    "/app/backend/tests/test_client_portal_iter12.py",
+    "/app/backend/tests/test_client_portal_iter11.py",
+    "/app/backend/tests/test_client_portal_iter10.py",
+    "/app/backend/tests/test_client_portal.py",
+    "/app/test_reports/pytest/iter12.xml",
+    "/app/test_reports/pytest/client_portal_full.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "client_portal.py wrappers force client scope AFTER Pydantic validation. Because OfficerCreate / ScheduleCreate have client_id as a required field, clients must still send SOME client_id (even a wrong one — it gets overwritten). This works because the reused admin UI always sends client_id from its dropdown. If any future flow calls these endpoints without a client_id, they'll get a 422. Consider making client_id Optional in the Pydantic models used by /portal/dispatch/* or letting the wrappers inject the field before validation for robustness.",
+    "Financial stripping is done at the /portal/schedules list path (lines 258, 499, 540) and for pd_create_schedule the admin route returns raw (with duty_rate=None/None). Verified via test: duty_rate/billing_rate/work_order_number are either absent or null in list & create response. If admin ever seeds financial values before a schedule reaches the client's view, the /portal/dispatch/schedules wrapper delegates to adm.list_schedules which does NOT strip financials — but our test list did not observe them. Recommend adding an explicit strip in pd_list_schedules for defence-in-depth.",
+    "dispatch.py router-level dependency `_block_client_role` blocks the client from /api/dispatch/* — confirmed all endpoints tested return 403 for role=client.",
+    "scopedApi.js correctly rewrites only strings starting with '/dispatch' to base '/portal/dispatch' — clean, and admin (no provider) is untouched. No changes to admin flow.",
+    "get_client_user self-heals the CLIENT_DISPATCH_PERMS on every call — a bit chatty but idempotent. Consider caching or setting once during seed.",
+    "portal_wage_report already reviewed in iter 11 — no new concerns."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_client_portal_iter12.py",
+    "/app/test_reports/iteration_12.json"
+  ],
+  "success_rate": {"backend": "100% (12/12 new + 40/40 regression = 52/52)", "frontend": "100%"},
+  "test_credentials": "Admin: admin@example.com/admin123; Client: acme@client.com/Acme@123",
+  "seed_data_creation": "None persistent. Test created and deleted 1 officer (TEST_Iter12 Officer, prefix ACM) and 1 schedule (2027-03-15). A residual schedule from an initial failed test run (409 conflict) on 2027-01-06 was manually cleaned up via API — no test data left behind.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Run: pytest /app/backend/tests/test_client_portal*.py -v. New testids in this iteration are unchanged from iter 11 sidebar (client-nav-*). The Dispatch schedule/calendar/officers/post-sites pages reuse admin testids from /pages/dashboard/dispatch/*. Base URL: https://office-flow-build.preview.emergentagent.com. Ensure old schedules for date 2027-01-06 don't linger — the lifecycle test now uses 2027-03-15 with variable hour to avoid conflicts."
+}

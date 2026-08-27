@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { api, formatApiErrorDetail } from '@/lib/axios';
+import { formatApiErrorDetail } from '@/lib/axios';
+import { useScopedApi } from '@/lib/scopedApi';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -185,6 +186,7 @@ const downloadFile = (filename, mime, content) => {
 };
 
 const DispatchSchedulePage = ({ todayOnly = false }) => {
+  const api = useScopedApi();
   const { user } = useAuthStore();
   const canCreate = hasPermission(user, 'dispatch.schedule.create');
   const canEdit = hasPermission(user, 'dispatch.schedule.edit');

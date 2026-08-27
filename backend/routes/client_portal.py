@@ -16,7 +16,13 @@ import io
 from utils.auth import get_current_user
 from utils.storage import to_public_url
 from utils.tz import dhaka_today_iso, dhaka_today
-from models.dispatch import COMPLETED_STATUSES, SHIFT_TYPES
+from models.dispatch import (
+    COMPLETED_STATUSES, SHIFT_TYPES,
+    ScheduleCreate, ScheduleUpdate, OfficerCreate, OfficerUpdate,
+    PostSiteCreate, PostSiteUpdate, ShiftStatusUpdate, ConfirmationUpdate,
+)
+from fastapi import UploadFile
+import routes.dispatch as adm
 
 router = APIRouter(prefix="/portal", tags=["Client Portal"])
 
@@ -66,14 +72,35 @@ def _strip_financial(d: dict) -> dict:
     return d
 
 
+CLIENT_DISPATCH_PERMS = [
+    "dispatch.dashboard.view",
+    "dispatch.schedule.view", "dispatch.schedule.create", "dispatch.schedule.edit",
+    "dispatch.schedule.cancel", "dispatch.schedule.delete",
+    "dispatch.clients.view", "dispatch.vendors.view",
+    "dispatch.officers.view", "dispatch.officers.create", "dispatch.officers.edit", "dispatch.officers.delete",
+    "dispatch.post_sites.view", "dispatch.post_sites.create", "dispatch.post_sites.edit", "dispatch.post_sites.delete",
+    "dispatch.confirmation.view", "dispatch.confirmation.manage", "dispatch.confirmation.history",
+]
+
+
 async def get_client_user(request: Request, db) -> dict:
     """Return the authenticated user, but only if they are a client with a
-    linked client_id. Enforces the portal is client-only."""
+    linked client_id. Enforces the portal is client-only.
+
+    Also ensures the client account carries the dispatch permissions needed by
+    the reused Dispatch page components. Direct /api/dispatch/* access remains
+    blocked for role=client, so these permissions only take effect through the
+    client-scoped /api/portal/dispatch wrappers."""
     user = await get_current_user(request, db)
     if user.get("role") != "client":
         raise HTTPException(status_code=403, detail="Client portal access only")
     if not user.get("client_id"):
         raise HTTPException(status_code=403, detail="No client is linked to this account")
+    missing = set(CLIENT_DISPATCH_PERMS) - set(user.get("permissions") or [])
+    if missing:
+        perms = sorted(set(user.get("permissions") or []) | set(CLIENT_DISPATCH_PERMS))
+        await db.users.update_one({"_id": ObjectId(str(user["_id"]))}, {"$set": {"permissions": perms}})
+        user["permissions"] = perms
     return user
 
 
@@ -719,3 +746,264 @@ async def portal_payments_officer_report(officer_id: str, fmt: str, request: Req
     data = build_officer_payment_records_pdf(ctx=ctx)
     return StreamingResponse(io.BytesIO(data), media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="Payment-{name}.pdf"'})
+
+
+# =====================================================================
+#  DISPATCH SECTION MIRROR  (client-scoped wrappers around admin logic)
+#  Prefix: /portal/dispatch/*  — the reused Dispatch page components hit
+#  /dispatch/* which the frontend rewrites to /portal/dispatch/*.
+#  Every wrapper forces the logged-in client's scope and validates
+#  ownership before delegating to the exact same admin route function.
+# =====================================================================
+
+async def _assert_owned_post_site(db, cid, post_site_id):
+    p = await db.dispatch_post_sites.find_one({"_id": _oid(post_site_id)})
+    if not p or str(p.get("client_id") or "") != str(cid):
+        raise HTTPException(400, "Post site does not belong to your account")
+
+
+async def _assert_owned_vendor(db, cid, vendor_id):
+    v = await db.dispatch_vendors.find_one({"_id": _oid(vendor_id)})
+    if not v or cid not in (v.get("client_ids") or []):
+        raise HTTPException(400, "Vendor is not assigned to your account")
+
+
+async def _assert_owned_officer(db, cid, officer_id):
+    if officer_id in ("TEMP", "OPEN_SHIFT"):
+        return
+    o = await db.dispatch_officers.find_one({"_id": _oid(officer_id)})
+    if not o or str(o.get("client_id") or "") != str(cid):
+        raise HTTPException(400, "Officer does not belong to your account")
+
+
+async def _assert_owned_schedule(db, cid, sid):
+    s = await db.dispatch_schedules.find_one({"_id": _oid(sid)})
+    if not s or str(s.get("client_id") or "") != str(cid):
+        raise HTTPException(404, "Schedule not found")
+    return s
+
+
+# ---------- reference lists (dropdowns / filters) ----------
+@router.get("/dispatch/clients")
+async def pd_clients(request: Request, db=Depends(get_db)):
+    user = await get_client_user(request, db)
+    doc = await db.dispatch_clients.find_one({"_id": _oid(user["client_id"])})
+    if not doc:
+        return []
+    out = _doc_out(doc)
+    if out.get("logo_path"):
+        out["logo_url"] = to_public_url(out["logo_path"])
+    return [out]
+
+
+@router.get("/dispatch/vendors")
+async def pd_vendors(request: Request, db=Depends(get_db), search: str = "", status: str = None):
+    user = await get_client_user(request, db)
+    cid = user["client_id"]
+    q = {"client_ids": cid}
+    ands = [{"client_ids": cid}]
+    if status:
+        ands.append({"status": status})
+    if search:
+        ands.append({"$or": [{"name": {"$regex": search, "$options": "i"}},
+                             {"code": {"$regex": search, "$options": "i"}}]})
+    q = {"$and": ands} if len(ands) > 1 else {"client_ids": cid}
+    docs = await db.dispatch_vendors.find(q).limit(500).to_list(500)
+    return [_doc_out(d) for d in docs]
+
+
+# ---------- officers ----------
+@router.get("/dispatch/officers")
+async def pd_list_officers(request: Request, db=Depends(get_db), search: str = "",
+                           client_id: str = None, type: str = None, status: str = None,
+                           skip: int = 0, limit: int = 200):
+    user = await get_client_user(request, db)
+    return await adm.list_officers(request, db, search=search, client_id=user["client_id"],
+                                   type=type, status=status, skip=skip, limit=limit)
+
+
+@router.post("/dispatch/officers")
+async def pd_create_officer(payload: OfficerCreate, request: Request, db=Depends(get_db)):
+    user = await get_client_user(request, db)
+    payload.client_id = user["client_id"]  # force to this client
+    return await adm.create_officer(payload, request, db)
+
+
+@router.put("/dispatch/officers/{oid}")
+async def pd_update_officer(oid: str, payload: OfficerUpdate, request: Request, db=Depends(get_db)):
+    user = await get_client_user(request, db)
+    existing = await db.dispatch_officers.find_one({"_id": _oid(oid)})
+    if not existing or str(existing.get("client_id") or "") != str(user["client_id"]):
+        raise HTTPException(404, "Officer not found")
+    payload.client_id = user["client_id"]  # cannot reassign to another client
+    return await adm.update_officer(oid, payload, request, db)
+
+
+@router.delete("/dispatch/officers/{oid}")
+async def pd_delete_officer(oid: str, request: Request, db=Depends(get_db)):
+    user = await get_client_user(request, db)
+    existing = await db.dispatch_officers.find_one({"_id": _oid(oid)})
+    if not existing or str(existing.get("client_id") or "") != str(user["client_id"]):
+        raise HTTPException(404, "Officer not found")
+    return await adm.delete_officer(oid, request, db)
+
+
+# ---------- post sites ----------
+@router.get("/dispatch/post-sites")
+async def pd_list_post_sites(request: Request, db=Depends(get_db), search: str = "",
+                             client_id: str = None, vendor_id: str = None, status: str = None,
+                             skip: int = 0, limit: int = 200):
+    user = await get_client_user(request, db)
+    return await adm.list_post_sites(request, db, search=search, client_id=user["client_id"],
+                                     vendor_id=vendor_id, status=status, skip=skip, limit=limit)
+
+
+@router.post("/dispatch/post-sites")
+async def pd_create_post_site(payload: PostSiteCreate, request: Request, db=Depends(get_db)):
+    user = await get_client_user(request, db)
+    payload.client_id = user["client_id"]
+    if getattr(payload, "vendor_id", None):
+        await _assert_owned_vendor(db, user["client_id"], payload.vendor_id)
+    return await adm.create_post_site(payload, request, db)
+
+
+@router.put("/dispatch/post-sites/{pid}")
+async def pd_update_post_site(pid: str, payload: PostSiteUpdate, request: Request, db=Depends(get_db)):
+    user = await get_client_user(request, db)
+    existing = await db.dispatch_post_sites.find_one({"_id": _oid(pid)})
+    if not existing or str(existing.get("client_id") or "") != str(user["client_id"]):
+        raise HTTPException(404, "Post Site not found")
+    payload.client_id = user["client_id"]
+    if getattr(payload, "vendor_id", None):
+        await _assert_owned_vendor(db, user["client_id"], payload.vendor_id)
+    return await adm.update_post_site(pid, payload, request, db)
+
+
+@router.delete("/dispatch/post-sites/{pid}")
+async def pd_delete_post_site(pid: str, request: Request, db=Depends(get_db)):
+    user = await get_client_user(request, db)
+    existing = await db.dispatch_post_sites.find_one({"_id": _oid(pid)})
+    if not existing or str(existing.get("client_id") or "") != str(user["client_id"]):
+        raise HTTPException(404, "Post Site not found")
+    return await adm.delete_post_site(pid, request, db)
+
+
+# ---------- schedules ----------
+@router.get("/dispatch/schedules")
+async def pd_list_schedules(request: Request, db=Depends(get_db),
+                            officer_id: str = None, vendor_id: str = None,
+                            post_site_id: str = None, post_pin: str = None,
+                            work_order: str = None, date_from: str = None, date_to: str = None,
+                            shift_type: str = None, confirmation_status: str = None,
+                            shift_status: str = None, search: str = "",
+                            page: int = 1, limit: int = 50):
+    user = await get_client_user(request, db)
+    return await adm.list_schedules(
+        request, db, officer_id=officer_id, vendor_id=vendor_id,
+        client_id=user["client_id"], post_site_id=post_site_id, post_pin=post_pin,
+        work_order=work_order, date_from=date_from, date_to=date_to,
+        shift_type=shift_type, confirmation_status=confirmation_status,
+        shift_status=shift_status, search=search, page=page, limit=limit)
+
+
+@router.get("/dispatch/schedules/import-template")
+async def pd_import_template(request: Request, db=Depends(get_db)):
+    await get_client_user(request, db)
+    return await adm.import_template(request, db) if hasattr(adm, "import_template") else {"detail": "n/a"}
+
+
+@router.post("/dispatch/schedules/import")
+async def pd_import_schedules(file: UploadFile, request: Request, db=Depends(get_db), dry_run: bool = False):
+    user = await get_client_user(request, db)
+    cid = user["client_id"]
+    result = await adm.import_schedules(file, request, db, dry_run=dry_run)
+    # Defensive scope enforcement: remove anything that resolved to another client.
+    removed = 0
+    for sidx in list(result.get("created_ids", [])):
+        doc = await db.dispatch_schedules.find_one({"_id": _oid(sidx)})
+        if doc and str(doc.get("client_id") or "") != str(cid):
+            await db.dispatch_schedules.delete_one({"_id": _oid(sidx)})
+            result["created_ids"].remove(sidx)
+            removed += 1
+    if removed:
+        result["created"] = max(0, result.get("created", 0) - removed)
+        result.setdefault("errors", []).append(
+            {"row": 0, "message": f"{removed} row(s) skipped: post site not in your account."})
+    return result
+
+
+@router.post("/dispatch/schedules")
+async def pd_create_schedule(payload: ScheduleCreate, request: Request, db=Depends(get_db)):
+    user = await get_client_user(request, db)
+    cid = user["client_id"]
+    payload.client_id = cid  # force
+    await _assert_owned_post_site(db, cid, payload.post_site_id)
+    await _assert_owned_vendor(db, cid, payload.vendor_id)
+    await _assert_owned_officer(db, cid, payload.officer_id)
+    return await adm.create_schedule(payload, request, db)
+
+
+@router.get("/dispatch/schedules/{sid}")
+async def pd_get_schedule(sid: str, request: Request, db=Depends(get_db)):
+    user = await get_client_user(request, db)
+    await _assert_owned_schedule(db, user["client_id"], sid)
+    return await adm.get_schedule(sid, request, db)
+
+
+@router.put("/dispatch/schedules/{sid}")
+async def pd_update_schedule(sid: str, payload: ScheduleUpdate, request: Request, db=Depends(get_db)):
+    user = await get_client_user(request, db)
+    cid = user["client_id"]
+    await _assert_owned_schedule(db, cid, sid)
+    data = payload.model_dump(exclude_unset=True)
+    if "client_id" in data:
+        payload.client_id = cid  # never allow moving to another client
+    if data.get("post_site_id"):
+        await _assert_owned_post_site(db, cid, data["post_site_id"])
+    if data.get("vendor_id"):
+        await _assert_owned_vendor(db, cid, data["vendor_id"])
+    if data.get("officer_id"):
+        await _assert_owned_officer(db, cid, data["officer_id"])
+    return await adm.update_schedule(sid, payload, request, db)
+
+
+@router.delete("/dispatch/schedules/{sid}")
+async def pd_delete_schedule(sid: str, request: Request, db=Depends(get_db)):
+    user = await get_client_user(request, db)
+    await _assert_owned_schedule(db, user["client_id"], sid)
+    return await adm.delete_schedule(sid, request, db)
+
+
+@router.post("/dispatch/schedules/{sid}/cancel")
+async def pd_cancel_schedule(sid: str, request: Request, db=Depends(get_db)):
+    user = await get_client_user(request, db)
+    await _assert_owned_schedule(db, user["client_id"], sid)
+    return await adm.cancel_schedule(sid, request, db)
+
+
+@router.post("/dispatch/schedules/{sid}/status")
+async def pd_status(sid: str, payload: ShiftStatusUpdate, request: Request, db=Depends(get_db)):
+    user = await get_client_user(request, db)
+    await _assert_owned_schedule(db, user["client_id"], sid)
+    return await adm.update_shift_status(sid, payload, request, db)
+
+
+@router.post("/dispatch/schedules/{sid}/confirm")
+async def pd_confirm(sid: str, payload: ConfirmationUpdate, request: Request, db=Depends(get_db)):
+    user = await get_client_user(request, db)
+    await _assert_owned_schedule(db, user["client_id"], sid)
+    return await adm.confirm_schedule(sid, payload, request, db)
+
+
+@router.get("/dispatch/schedules/{sid}/actions")
+async def pd_actions(sid: str, request: Request, db=Depends(get_db)):
+    user = await get_client_user(request, db)
+    await _assert_owned_schedule(db, user["client_id"], sid)
+    return await adm.schedule_actions(sid, request, db)
+
+
+# ---------- upload logo (no client data) ----------
+@router.post("/dispatch/upload-logo")
+async def pd_upload_logo(file: UploadFile, request: Request, db=Depends(get_db)):
+    await get_client_user(request, db)
+    return await adm.upload_dispatch_logo(file, request)

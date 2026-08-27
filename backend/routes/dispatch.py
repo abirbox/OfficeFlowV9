@@ -35,7 +35,19 @@ UMA_TIME = "UMA"
 from utils.storage import to_public_url
 from utils.ws import manager
 
-router = APIRouter(prefix="/dispatch", tags=["Dispatch"])
+
+async def _block_client_role(request: Request):
+    """Clients never use the admin Dispatch API directly — they have their own
+    scoped /api/portal/dispatch endpoints. This guard hard-blocks role=client
+    on every /api/dispatch/* route so a client can never read another client's
+    data through the admin endpoints. Admin/HD/staff are unaffected."""
+    db = request.app.state.db
+    user = await get_current_user(request, db)
+    if user.get("role") == "client":
+        raise HTTPException(status_code=403, detail="Clients must use the client portal")
+
+
+router = APIRouter(prefix="/dispatch", tags=["Dispatch"], dependencies=[Depends(_block_client_role)])
 
 
 def _format_pin(vendor_code, post_pin):
@@ -285,6 +297,20 @@ async def delete_vendor(vid: str, request: Request, db=Depends(get_db)):
 # =====================================================================
 #  CLIENT PORTAL LOGIN  (admin creates/manages a client's login account)
 # =====================================================================
+# Dispatch permissions granted to a Client Portal login so the reused Dispatch
+# page components render their controls. Direct /api/dispatch/* stays blocked for
+# role=client (see _block_client_role); these only work via /api/portal/dispatch/*.
+CLIENT_PORTAL_PERMS = [
+    "dispatch.dashboard.view",
+    "dispatch.schedule.view", "dispatch.schedule.create", "dispatch.schedule.edit",
+    "dispatch.schedule.cancel", "dispatch.schedule.delete",
+    "dispatch.clients.view", "dispatch.vendors.view",
+    "dispatch.officers.view", "dispatch.officers.create", "dispatch.officers.edit", "dispatch.officers.delete",
+    "dispatch.post_sites.view", "dispatch.post_sites.create", "dispatch.post_sites.edit", "dispatch.post_sites.delete",
+    "dispatch.confirmation.view", "dispatch.confirmation.manage", "dispatch.confirmation.history",
+]
+
+
 @router.get("/clients/{cid}/portal")
 async def get_client_portal(cid: str, request: Request, db=Depends(get_db)):
     user = await get_current_user(request, db)
@@ -316,7 +342,7 @@ async def set_client_portal(cid: str, payload: ClientPortalCredentials,
 
     if portal_user:
         upd = {"email": email, "name": client.get("name"),
-               "client_id": cid, "updated_at": _now()}
+               "client_id": cid, "permissions": CLIENT_PORTAL_PERMS, "updated_at": _now()}
         if payload.password:
             upd["password_hash"] = hash_password(payload.password)
         await db.users.update_one({"_id": portal_user["_id"]}, {"$set": upd})
@@ -329,7 +355,7 @@ async def set_client_portal(cid: str, payload: ClientPortalCredentials,
             "name": client.get("name"),
             "role": "client",
             "client_id": cid,
-            "permissions": [],
+            "permissions": CLIENT_PORTAL_PERMS,
             "status": "active",
             "created_at": _now(),
             "updated_at": _now(),
@@ -737,11 +763,14 @@ async def _audit(db, actor, action, entity_type, entity_id,
 async def _notify_dispatch(db, actor, title, message, link, event):
     """Persist a notification for every dispatch-privileged user (except the
     actor) and push a live event to any connected WebSocket clients."""
-    recipients = await db.users.find({"$or": [
-        {"role": {"$in": ["super_admin", "hd"]}},
-        {"permissions": {"$in": [
-            "dispatch.confirmation.view", "dispatch.schedule.view", "dispatch.dashboard.view",
-        ]}},
+    recipients = await db.users.find({"$and": [
+        {"role": {"$ne": "client"}},
+        {"$or": [
+            {"role": {"$in": ["super_admin", "hd"]}},
+            {"permissions": {"$in": [
+                "dispatch.confirmation.view", "dispatch.schedule.view", "dispatch.dashboard.view",
+            ]}},
+        ]},
     ]}, {"_id": 1}).to_list(2000)
     actor_id = str(actor.get("_id"))
     ids = [str(u["_id"]) for u in recipients if str(u["_id"]) != actor_id]

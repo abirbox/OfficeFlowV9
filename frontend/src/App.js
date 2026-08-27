@@ -39,11 +39,7 @@ import ClientProtectedRoute from "@/components/ClientProtectedRoute";
 import ClientPortalLayout from "@/layouts/ClientPortalLayout";
 import ClientDashboard from "@/pages/client/ClientDashboard";
 import ClientVendors from "@/pages/client/ClientVendors";
-import ClientSchedules from "@/pages/client/ClientSchedules";
 import ClientReports from "@/pages/client/ClientReports";
-import ClientOfficers from "@/pages/client/ClientOfficers";
-import ClientCalendar from "@/pages/client/ClientCalendar";
-import ClientToday from "@/pages/client/ClientToday";
 import ClientPaymentSO from "@/pages/client/ClientPaymentSO";
 import ClientWageReport from "@/pages/client/ClientWageReport";
 import "@/App.css";
@@ -116,11 +112,12 @@ function App() {
             }
           >
             <Route index element={<ClientDashboard />} />
-            <Route path="officers" element={<ClientOfficers />} />
-            <Route path="today" element={<ClientToday />} />
-            <Route path="calendar" element={<ClientCalendar />} />
+            <Route path="today" element={<DispatchSchedulePage todayOnly />} />
+            <Route path="schedules" element={<DispatchSchedulePage />} />
+            <Route path="calendar" element={<DispatchCalendarPage />} />
+            <Route path="officers" element={<OfficersPage />} />
+            <Route path="post-sites" element={<PostSitesPage />} />
             <Route path="vendors" element={<ClientVendors />} />
-            <Route path="schedules" element={<ClientSchedules />} />
             <Route path="payments" element={<ClientPaymentSO />} />
             <Route path="wage-report" element={<ClientWageReport />} />
             <Route path="reports" element={<ClientReports />} />

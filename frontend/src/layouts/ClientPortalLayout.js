@@ -7,18 +7,20 @@ import { useAppSettings } from '@/contexts/AppSettingsContext';
 import { api } from '@/lib/axios';
 import {
   LayoutDashboard, Building2, CalendarDays, BarChart3,
-  LogOut, Menu, X, Sun, Moon, Shield, Users, CalendarClock, DollarSign, Wallet,
+  LogOut, Menu, X, Sun, Moon, Shield, Users, CalendarClock, DollarSign, Wallet, MapPin,
 } from 'lucide-react';
+import { ScopeProvider } from '@/lib/scopedApi';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 
 const navItems = [
   { name: 'Dashboard', href: '/client', icon: LayoutDashboard, end: true },
-  { name: 'Security Officers', href: '/client/officers', icon: Shield },
   { name: "Today's Dispatch", href: '/client/today', icon: CalendarClock },
+  { name: 'Dispatch Schedule', href: '/client/schedules', icon: Users },
   { name: 'Dispatch Calendar', href: '/client/calendar', icon: CalendarDays },
+  { name: 'Security Officers', href: '/client/officers', icon: Shield },
+  { name: 'Post Sites', href: '/client/post-sites', icon: MapPin },
   { name: 'Vendors', href: '/client/vendors', icon: Building2 },
-  { name: 'Schedules', href: '/client/schedules', icon: Users },
   { name: 'Payment SO', href: '/client/payments', icon: DollarSign },
   { name: 'Wage Report', href: '/client/wage-report', icon: Wallet },
   { name: 'Reports', href: '/client/reports', icon: BarChart3 },
@@ -138,7 +140,9 @@ const ClientPortalLayout = () => {
       <main className="lg:ml-64">
         <div className="pt-16 lg:pt-0 min-w-0">
           <div className="p-4 md:p-8">
-            <Outlet />
+            <ScopeProvider base="/portal/dispatch">
+              <Outlet />
+            </ScopeProvider>
           </div>
         </div>
       </main>
