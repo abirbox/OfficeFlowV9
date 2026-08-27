@@ -1,0 +1,241 @@
+"""Dispatch module models — all Pydantic schemas for the Dispatch System."""
+from pydantic import BaseModel, EmailStr, Field
+from typing import Optional, List
+from datetime import datetime
+
+# ---------- Client ----------
+class ClientBase(BaseModel):
+    code: Optional[str] = None
+    name: str
+    logo_path: Optional[str] = None
+    accent_color: Optional[str] = None  # Hex like #D4A017; drives invoice accents
+    contact_person: Optional[str] = None
+    contact_number: Optional[str] = None
+    website: Optional[str] = None
+    email: Optional[EmailStr] = None
+    address: Optional[str] = None
+    location: Optional[str] = None
+    city: Optional[str] = None
+    status: str = "active"
+    notes: Optional[str] = None
+
+class ClientCreate(ClientBase): pass
+class ClientUpdate(BaseModel):
+    code: Optional[str] = None
+    name: Optional[str] = None
+    logo_path: Optional[str] = None
+    accent_color: Optional[str] = None
+    contact_person: Optional[str] = None
+    contact_number: Optional[str] = None
+    website: Optional[str] = None
+    email: Optional[EmailStr] = None
+    address: Optional[str] = None
+    location: Optional[str] = None
+    city: Optional[str] = None
+    status: Optional[str] = None
+    notes: Optional[str] = None
+
+# ---------- Vendor ----------
+class VendorBase(BaseModel):
+    code: Optional[str] = None
+    name: str
+    logo_path: Optional[str] = None
+    contact_person: Optional[str] = None
+    contact_number: Optional[str] = None
+    website: Optional[str] = None
+    email: Optional[EmailStr] = None
+    address: Optional[str] = None
+    location: Optional[str] = None
+    city: Optional[str] = None
+    status: str = "active"
+    notes: Optional[str] = None
+
+class VendorCreate(VendorBase): pass
+class VendorUpdate(BaseModel):
+    code: Optional[str] = None
+    name: Optional[str] = None
+    logo_path: Optional[str] = None
+    contact_person: Optional[str] = None
+    contact_number: Optional[str] = None
+    website: Optional[str] = None
+    email: Optional[EmailStr] = None
+    address: Optional[str] = None
+    location: Optional[str] = None
+    city: Optional[str] = None
+    status: Optional[str] = None
+    notes: Optional[str] = None
+
+# ---------- Security Officer ----------
+OFFICER_STATUSES = ["active", "inactive", "suspended", "terminated", "on_leave"]
+
+OFFICER_TYPES = ["Armed", "Unarmed"]
+
+class OfficerBase(BaseModel):
+    # Automatically generated from the selected Client's code.
+    # Kept in the model for backward compatibility, but the backend
+    # controls the actual stored value.
+    officer_code: Optional[str] = None
+    profile_image: Optional[str] = None
+    name: str
+    contact_number: str  # required
+    alternate_contact_number: Optional[str] = None
+    address: Optional[str] = None
+    email: Optional[EmailStr] = None
+    client_id: str  # Security Officer must belong to a Client
+    type: str = "Unarmed"
+    status: str = "active"
+    joining_date: Optional[str] = None
+    notes: Optional[str] = None
+
+class OfficerCreate(OfficerBase):
+    pass
+
+class OfficerUpdate(BaseModel):
+    # Accepted for backward compatibility, but backend always regenerates
+    # officer_code from the selected Client.
+    officer_code: Optional[str] = None
+    profile_image: Optional[str] = None
+    name: Optional[str] = None
+    contact_number: Optional[str] = None
+    alternate_contact_number: Optional[str] = None
+    address: Optional[str] = None
+    email: Optional[EmailStr] = None
+    client_id: Optional[str] = None
+    type: Optional[str] = None
+    status: Optional[str] = None
+    joining_date: Optional[str] = None
+    notes: Optional[str] = None
+
+# ---------- Post Site ----------
+class PostSiteBase(BaseModel):
+    post_pin: str
+    name: str
+    client_id: Optional[str] = None   # picked from Schedule form, not required here
+    vendor_id: Optional[str] = None
+    location: str = Field(min_length=1)
+    city: Optional[str] = None
+    status: str = "active"
+    notes: Optional[str] = None
+
+class PostSiteCreate(PostSiteBase): pass
+class PostSiteUpdate(BaseModel):
+    post_pin: Optional[str] = None
+    name: Optional[str] = None
+    client_id: Optional[str] = None
+    vendor_id: Optional[str] = None
+    location: Optional[str] = None
+    city: Optional[str] = None
+    status: Optional[str] = None
+    notes: Optional[str] = None
+
+# ---------- Dispatch Schedule ----------
+SHIFT_TYPES = ["Morning", "Afternoon", "Evening", "Night"]
+SHIFT_STATUSES = ["Not Started", "Clocked In", "Clocked Out"]
+
+# Statuses that count as a "worked" shift for payroll / invoices / paid hours.
+# Once an officer is Clocked In the shift is treated as complete.
+COMPLETED_STATUSES = ["Clocked In", "Clocked Out"]
+
+# Legacy -> new name map used by the startup migration + backward-compat
+# aggregations. Old values in the DB are rewritten on boot; keep this map
+# as the single source of truth if you need to add more renames later.
+LEGACY_STATUS_MAP = {
+    "Check-in": "Clocked In",
+    "Checkout": "Clocked Out",
+    "Late Clock In": "Clocked In",
+    "Late Clock Out": "Clocked Out",
+    "Early Clock Out": "Clocked Out",
+    "Late Clocked In": "Clocked In",
+    "Late Clocked Out": "Clocked Out",
+    "Early Clocked Out": "Clocked Out",
+    "Completed": "Clocked Out",
+    "Complete": "Clocked Out",
+    "Cancelled": "Not Started",
+    "Absent": "Not Started",
+}
+CONFIRMATION_STATUSES = ["Not Confirmed", "Pending", "Confirmed", "Declined", "No Response"]
+CONFIRMATION_METHODS = ["Call", "Text", "Call + Text"]
+
+class ScheduleCreate(BaseModel):
+    # "once" keeps the existing single-date behavior.
+    # "multiple" creates one schedule for every date from date_from to date_to.
+    schedule_mode: str = "once"
+    date: Optional[str] = None  # YYYY-MM-DD — used by "once"
+    date_from: Optional[str] = None  # YYYY-MM-DD — used by "multiple"
+    date_to: Optional[str] = None  # YYYY-MM-DD — used by "multiple"
+    shift_type: str
+    start_time: str  # HH:MM 24h
+    end_time: str
+    client_id: str
+    vendor_id: str
+    post_site_id: str
+    officer_id: str
+    work_order_number: Optional[str] = None  # optional — schedules can be created without a W.O.
+    duty_rate: Optional[float] = None
+    billing_rate: Optional[float] = None
+    remarks: Optional[str] = None
+
+class ScheduleUpdate(BaseModel):
+    date: Optional[str] = None
+    shift_type: Optional[str] = None
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    client_id: Optional[str] = None
+    vendor_id: Optional[str] = None
+    post_site_id: Optional[str] = None
+    officer_id: Optional[str] = None
+    duty_rate: Optional[float] = None
+    billing_rate: Optional[float] = None
+    work_order_number: Optional[str] = None
+    remarks: Optional[str] = None
+    shift_status: Optional[str] = None
+    actual_check_in: Optional[str] = None
+    actual_check_out: Optional[str] = None
+
+class ConfirmationUpdate(BaseModel):
+    confirmation_status: str
+    confirmation_method: Optional[str] = None
+    remarks: Optional[str] = None
+
+
+class ShiftStatusUpdate(BaseModel):
+    shift_status: str
+    actual_check_in: Optional[str] = None
+    actual_check_out: Optional[str] = None
+    remarks: Optional[str] = None
+
+
+# ---------- Dispatch Invoices ----------
+class InvoiceLine(BaseModel):
+    """One row on the invoice line-item table.
+
+    Every field is optional so users can add blank custom lines (e.g. an
+    additional surcharge or a note row) and edit any auto-populated value
+    before finalising the invoice.
+    """
+    schedule_id: Optional[str] = None
+    shift_date: Optional[str] = None
+    location: Optional[str] = None
+    post_pin: Optional[str] = None
+    pin_display: Optional[str] = None
+    post_site_name: Optional[str] = None
+    work_order: Optional[str] = None
+    actual_hours: Optional[float] = 0
+    rate: Optional[float] = 0
+    total_amount: Optional[float] = None
+
+
+class DispatchInvoiceCreate(BaseModel):
+    client_id: str
+    vendor_id: str
+    post_site_id: Optional[str] = None      # legacy single-location
+    post_site_ids: Optional[List[str]] = None  # multi-select
+    invoice_number: str
+    invoice_date: str  # YYYY-MM-DD
+    billing_period_from: str
+    billing_period_to: str
+    notes: Optional[str] = None
+    # When present the invoice uses these edited lines (from the customise
+    # screen) instead of re-aggregating schedules. Totals are recomputed
+    # server-side so amount_in_words stays in sync.
+    lines: Optional[List[InvoiceLine]] = None

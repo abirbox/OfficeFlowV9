@@ -1,0 +1,29 @@
+{
+  "summary": "Frontend-only testing of the new Employee/Dispatch portal split (DashboardLayout + portalStore + permissions). Covered: post-login portal-selection popup for a dispatch-capable user, module isolation in each portal, bidirectional in-app switching (desktop + mobile nav), persistence across reload, logout clearing the portal choice so the popup re-appears, and permission gating for a plain employee (no dispatch perms). All 6 requested scenarios PASSED. Backend was skipped per request (only used the employees API once to seed a no-dispatch test employee).",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Portal selection popup", "issues": ["Cosmetic only: no explicit heading data-testid and no keyboard focus trap / initial focus on the two portal buttons (a11y nice-to-have). Behaviour is correct - overlay cannot be dismissed by outside click as designed."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/seed_plain_employee.py"],
+  "action_items": [
+    "LOW: choosePortal('dispatch')/switchPortal always navigate to /dashboard/dispatch. A user with partial dispatch perms but WITHOUT 'dispatch.dashboard.view' will land on a 'You do not have permission to view the Dispatch dashboard.' page. Consider navigating to the first permitted dispatch route instead (verified this guard message exists for the plain employee via direct URL).",
+    "LOW: Deep-linking /dashboard/dispatch/* while portal='employee' renders dispatch page content with the employee sidebar (portal state is not derived from the route). Consider syncing portal from location.pathname.",
+    "INFO: /app/memory/test_credentials.md lists test@officeflow.com / Test@123 but that account does NOT exist (login returns 'Invalid email or password'). I seeded test.plain@officeflow.com / Test@123 (role employee, permissions: []) for the no-dispatch case - please update the credentials file."
+  ],
+  "critical_code_review_comments": [
+    "DashboardLayout.js is ~515 lines and mixes nav config, portal popup, desktop sidebar, mobile drawer and topbar - consider extracting PortalSelectDialog and the nav config into separate modules.",
+    "effectivePortal correctly falls back to 'employee' for non-dispatch users, so a tampered localStorage['officeflow_portal']='dispatch' does not expose dispatch nav (verified in browser)."
+  ],
+  "updated_files": ["/app/backend/tests/seed_plain_employee.py"],
+  "success_rate": { "backend": "not tested (skipped per request)", "frontend": "100% (6/6 scenarios)" },
+  "seed_data_creation": "Created employee 'TEST Plain Employee' test.plain@officeflow.com / Test@123 (role employee, no dispatch permissions) via POST /api/employees as admin. Left in DB intentionally for future portal-gating regression tests.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "admin@example.com / admin123 (super_admin, dispatch); test.plain@officeflow.com / Test@123 (employee, no dispatch). NOTE: test@officeflow.com does not exist.",
+  "context_for_next_testing_agent": "Portal split verified end-to-end at 1920x900. Admin: popup (portal-select-overlay) -> employee portal shows exactly 11 employee modules and no dispatch modules; switch-portal-button toggles to dispatch portal (/dashboard/dispatch) showing exactly the 12 dispatch modules with correct label; repeated switching works; choice persists across reload; logout clears localStorage['officeflow_portal'] (verified null) and the popup reappears; choosing dispatch lands directly on the Dispatch Dashboard. Mobile (390x844) mobile-switch-portal-button works too. Plain employee: no popup, only self-service employee modules, no switch button (desktop or mobile), direct /dashboard/dispatch shows a permission-denied message, and localStorage tampering does not unlock dispatch nav. If popup does not appear, clear localStorage['officeflow_portal'].",
+  "rca_of_the_issue": "N/A - no defects reproduced; only two low-priority UX gaps noted (dispatch landing route not permission-aware, portal state not derived from URL on deep links)."
+}

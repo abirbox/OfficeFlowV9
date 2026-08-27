@@ -1,0 +1,43 @@
+{
+  "summary": "Regression testing for the Asia/Dhaka timezone refactor (V7). Backend: 5 pytest cases pass (login+HttpOnly cookie, /dispatch/dashboard/stats returns open_positions, /dispatch/reports/schedules with explicit range, /attendance/today, and per-officer payslip PDF via the GET /dispatch/reports/export/entity-detail?template=payslip route). 1 case skipped because /api/shifts/today does not exist in this codebase (only /api/shifts, /api/shifts/all, /api/shifts/sessions/mine). Frontend: 6 requested pages (Attendance, Dispatch Calendar, Dispatch Reports, Dispatch Audit Log, Tasks, Shifts) all render with 0 page errors and 0 console errors after login as admin. Timezone display verified on Dispatch Audit Log — every row is rendered as e.g. '23 Aug 2026, 18:22 BDT' matching Asia/Dhaka (`Date.toLocaleString('en-CA', {timeZone: 'Asia/Dhaka'})` equals ISO shown). Container OS tz is UTC, so the BDT label proves the pin is in code, not env.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/shifts/today", "issue": "Route does not exist (405/404). The main-agent brief listed this as an endpoint that now uses dhaka_today_iso(), but routes/shifts.py has no /today handler. Either add the route or update the brief. /api/attendance/today works fine."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Topbar NotificationBell", "issue": "Notification bell button is missing a data-testid (looked for [data-testid=\"notification-bell\"]). Only reachable via header svg button — makes automated tz-of-notification verification brittle.", "selector": "header button:has(svg.lucide-bell)", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Dispatch Audit Log filters", "issues": ["Date From / Date To use browser-native <input type=\"date\"> (mm/dd/yyyy placeholder in Chrome) instead of the shadcn Calendar component. In an app that is explicitly pinning Asia/Dhaka, the native picker will still parse in the browser's local zone. Consider using the shadcn DatePicker with the new /lib/datetime helpers."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_timezone_dhaka.py",
+    "/app/test_reports/pytest/tz_results.xml"
+  ],
+  "action_items": [
+    "Confirm whether /api/shifts/today should exist. If yes, add the route (using dhaka_today_iso()); if no, remove it from the release notes / brief.",
+    "Add data-testid=\"notification-bell\" to the bell trigger in the topbar so timezone/UI tests can reliably open the popover.",
+    "Consider replacing native <input type=\"date\"> in Audit Log filters (and likely Reports/Schedules filters) with a shadcn Calendar bound to lib/datetime helpers to keep filtering in Asia/Dhaka."
+  ],
+  "critical_code_review_comments": [
+    "utils/tz.py cleanly centralizes dhaka_now/dhaka_today/dhaka_today_iso — good. Verified /dispatch/dashboard/stats and /attendance/today no longer call date.today().",
+    "frontend/src/lib/datetime.js is small, focused and correct (en-CA for ISO, en-GB for human, dhakaParts via Intl.DateTimeFormat). Reused across the refactored components.",
+    "Audit Log rows render '… BDT' via formatDateTime({withZone:true}) — good UX confirmation of the pin.",
+    "routes/dispatch.py is 3000+ lines — recommend splitting payslip, advance-salary, and reports export into separate modules (already flagged in prior iterations)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_timezone_dhaka.py"
+  ],
+  "success_rate": {"backend": "100% of applicable (5/5 passed, 1 skipped due to missing route)", "frontend": "100% (6/6 pages rendered, 0 runtime/console errors; Dhaka tz visibly correct on Audit Log)"},
+  "test_credentials": "admin@example.com / admin123 (super_admin)",
+  "seed_data_creation": "None (used existing officer 'Kuddus' and existing audit entries).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Timezone refactor to Asia/Dhaka is landed and verified. Backend uses utils/tz.dhaka_today_iso()/dhaka_today() at the previously-UTC callsites. Frontend imports formatDate/formatTime/formatDateTime/todayIso from @/lib/datetime. To re-verify, log in as admin, choose Dispatch portal, open Dispatch Audit Log — every row must end with 'BDT' and the date part must equal `new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Dhaka'})` reformatted. Two loose ends flagged: (1) /api/shifts/today route not present, (2) notification-bell has no data-testid so tz-of-notification cannot be automated.",
+  "rca_of_the_issue": "N/A — no defects reproduced. Only a doc mismatch (shifts/today) and a testability gap (missing data-testid on bell)."
+}

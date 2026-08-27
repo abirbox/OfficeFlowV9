@@ -1,0 +1,40 @@
+{
+  "summary": "Frontend-only E2E browser testing of OfficeFlowV5 preview deployment. Verified /login rendering, admin login (admin@example.com/admin123) redirect to /dashboard, dashboard data loading from backend, Employees page list, session persistence after reload, and invalid-credential error handling. All 4 requested flows PASS. Zero console errors and zero CORS errors; all /api/* XHRs returned 200 on same origin via relative /api baseURL.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "Dispatch realtime websocket",
+        "issue": "Console warning on every dashboard load: WebSocket connection to 'wss://<host>/api/ws/dispatch' failed: WebSocket is closed before the connection is established. Non-blocking (page renders fine) but realtime dispatch updates will not work in preview; likely ingress/WS proxy not enabled for /api/ws. Verify backend WS route is mounted and add reconnect/graceful-degrade handling.",
+        "affected_selectors": []
+      },
+      {
+        "flow": "Dashboard stats vs Employees list",
+        "issue": "Dashboard 'Total Employees' shows 0 while /api/employees returns 1 record (Super Admin) rendered on Employees page. /api/admin/dashboard-stats likely excludes admin/super_admin roles - confirm this is intended, otherwise counts are inconsistent.",
+        "affected_selectors": []
+      }
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [
+    "Confirm/enable WebSocket proxying for /api/ws/dispatch or suppress the repeated failed-connection warning with graceful fallback",
+    "Confirm intended behaviour of dashboard Total Employees = 0 vs 1 employee listed on Employees page"
+  ],
+  "critical_code_review_comments": [
+    "authStore.login sets isAuthenticated without resetting isLoading; ProtectedRoute relies on checkAuth so this is currently harmless but is fragile.",
+    "Dashboard issues duplicate polling calls (presence/heartbeat, gps/active, notifications, employee-status fired twice per cycle) - likely double-mounted effects (StrictMode) causing 2x backend load."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "not tested (skipped per request)", "frontend": "100% (6/6 flows passed)"},
+  "seed_data_creation": "None created; used auto-seeded admin@example.com",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "admin@example.com / admin123 (super_admin) - valid and working",
+  "context_for_next_testing_agent": "Frontend E2E verified: login page render, login+redirect to /dashboard, dashboard stats/live status render, /dashboard/employees list, session persistence across reload, invalid password shows 'Invalid email or password' via [data-testid=login-error-message]. All API calls same-origin relative /api, all 200s. Remaining untested areas: Shifts, Attendance, Live Map, Leaves, Payroll, Reports, Settings, and all Dispatch module pages; also CRUD (Add Employee modal) not exercised. Known open item: /api/ws/dispatch websocket fails in preview.",
+  "rca_of_the_issue": "N/A - no blocking issues. WS warning root cause: wss upgrade to /api/ws/dispatch is closed before establishment, consistent with ingress not forwarding WebSocket upgrade for the /api path in the preview environment."
+}
