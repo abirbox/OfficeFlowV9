@@ -33,6 +33,7 @@ from routes.dispatch import router as dispatch_router
 from routes.dispatch_invoices import router as dispatch_invoices_router
 from routes.so_payments import router as so_payments_router
 from routes.presence import router as presence_router
+from routes.client_portal import router as client_portal_router
 from utils.auth import hash_password, verify_password
 from utils.storage import init_storage, get_object
 from utils.ws import manager
@@ -207,6 +208,7 @@ api_router.include_router(dispatch_router)
 api_router.include_router(dispatch_invoices_router)
 api_router.include_router(so_payments_router)
 api_router.include_router(presence_router)
+api_router.include_router(client_portal_router)
 
 
 @api_router.get("/files/{path:path}")

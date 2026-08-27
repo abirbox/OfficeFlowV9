@@ -35,6 +35,12 @@ import DispatchAuditPage from "@/pages/dashboard/dispatch/DispatchAuditPage";
 import DispatchInvoicesPage from "@/pages/dashboard/dispatch/DispatchInvoicesPage";
 import PaymentSOPage from "@/pages/dashboard/dispatch/PaymentSOPage";
 import { ClientsPage, VendorsPage, OfficersPage, PostSitesPage } from "@/pages/dashboard/dispatch/EntityPages";
+import ClientProtectedRoute from "@/components/ClientProtectedRoute";
+import ClientPortalLayout from "@/layouts/ClientPortalLayout";
+import ClientDashboard from "@/pages/client/ClientDashboard";
+import ClientVendors from "@/pages/client/ClientVendors";
+import ClientSchedules from "@/pages/client/ClientSchedules";
+import ClientReports from "@/pages/client/ClientReports";
 import "@/App.css";
 
 function App() {
@@ -94,6 +100,20 @@ function App() {
             <Route path="dispatch/vendors" element={<VendorsPage />} />
             <Route path="dispatch/officers" element={<OfficersPage />} />
             <Route path="dispatch/post-sites" element={<PostSitesPage />} />
+          </Route>
+
+          <Route
+            path="/client"
+            element={
+              <ClientProtectedRoute>
+                <ClientPortalLayout />
+              </ClientProtectedRoute>
+            }
+          >
+            <Route index element={<ClientDashboard />} />
+            <Route path="vendors" element={<ClientVendors />} />
+            <Route path="schedules" element={<ClientSchedules />} />
+            <Route path="reports" element={<ClientReports />} />
           </Route>
 
           <Route path="*" element={<NotFoundPage />} />

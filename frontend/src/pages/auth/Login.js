@@ -30,7 +30,11 @@ const Login = () => {
 
     if (result.success) {
       refresh();
-      navigate(from, { replace: true });
+      if (result.user?.role === 'client') {
+        navigate('/client', { replace: true });
+      } else {
+        navigate(from, { replace: true });
+      }
     } else {
       setError(result.error);
     }

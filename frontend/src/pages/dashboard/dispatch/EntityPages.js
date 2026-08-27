@@ -1,8 +1,10 @@
 import EntityCrudPage from './EntityCrudPage';
+import ClientPortalLoginDialog from './ClientPortalLoginDialog';
 
 export const ClientsPage = () => (
   <EntityCrudPage
     title="Clients" endpoint="/dispatch/clients" permBase="dispatch.clients"
+    rowActions={(row) => <ClientPortalLoginDialog client={row} />}
     columns={[{ key: 'logo_path', label: 'Logo', type: 'logo' }, { key: 'name', label: 'Name' }, { key: 'code', label: 'Code' }, { key: 'contact_person', label: 'Contact' }, { key: 'contact_number', label: 'Phone' }, { key: 'city', label: 'City' }]}
     fields={[
       { key: 'logo_path', label: 'Logo', type: 'logo' },
@@ -29,6 +31,7 @@ export const VendorsPage = () => (
       { key: 'logo_path', label: 'Logo', type: 'logo' },
       { key: 'name', label: 'Name', required: true },
       { key: 'code', label: 'Code' },
+      { key: 'client_ids', label: 'Linked Clients (which Clients this Vendor serves)', multi: 'clients' },
       { key: 'contact_person', label: 'Contact Person' },
       { key: 'contact_number', label: 'Contact Number' },
       { key: 'email', label: 'Email' },

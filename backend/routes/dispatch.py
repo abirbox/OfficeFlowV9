@@ -17,8 +17,9 @@ from models.dispatch import (
     SHIFT_TYPES, SHIFT_STATUSES, COMPLETED_STATUSES, CONFIRMATION_STATUSES, CONFIRMATION_METHODS,
     OFFICER_TYPES,
     PayslipRecordCreate,
+    ClientPortalCredentials,
 )
-from utils.auth import get_current_user
+from utils.auth import get_current_user, hash_password
 from utils.permissions import (
     has_permission, require_permission, strip_financial,
     ALL_PERMISSIONS, FINANCIAL_FIELDS,
@@ -279,6 +280,77 @@ async def delete_vendor(vid: str, request: Request, db=Depends(get_db)):
     if r.deleted_count == 0: raise HTTPException(404, "Vendor not found")
     await _audit(db, user, "delete", "vendor", vid, (existing or {}).get("name"))
     return {"message": "Vendor deleted"}
+
+
+# =====================================================================
+#  CLIENT PORTAL LOGIN  (admin creates/manages a client's login account)
+# =====================================================================
+@router.get("/clients/{cid}/portal")
+async def get_client_portal(cid: str, request: Request, db=Depends(get_db)):
+    user = await get_current_user(request, db)
+    require_permission(user, "dispatch.clients.view")
+    client = await db.dispatch_clients.find_one({"_id": _oid(cid)})
+    if not client:
+        raise HTTPException(404, "Client not found")
+    portal_user = await db.users.find_one({"role": "client", "client_id": cid})
+    return {"enabled": bool(portal_user),
+            "email": portal_user.get("email") if portal_user else None}
+
+
+@router.put("/clients/{cid}/portal")
+async def set_client_portal(cid: str, payload: ClientPortalCredentials,
+                            request: Request, db=Depends(get_db)):
+    user = await get_current_user(request, db)
+    require_permission(user, "dispatch.clients.edit")
+    client = await db.dispatch_clients.find_one({"_id": _oid(cid)})
+    if not client:
+        raise HTTPException(404, "Client not found")
+
+    email = payload.email.lower().strip()
+    portal_user = await db.users.find_one({"role": "client", "client_id": cid})
+
+    # Email must be unique across ALL users (except this client's own account).
+    dup = await db.users.find_one({"email": email})
+    if dup and (not portal_user or str(dup["_id"]) != str(portal_user["_id"])):
+        raise HTTPException(400, "Email already in use by another account")
+
+    if portal_user:
+        upd = {"email": email, "name": client.get("name"),
+               "client_id": cid, "updated_at": _now()}
+        if payload.password:
+            upd["password_hash"] = hash_password(payload.password)
+        await db.users.update_one({"_id": portal_user["_id"]}, {"$set": upd})
+    else:
+        if not payload.password:
+            raise HTTPException(400, "Password is required to create a client login")
+        await db.users.insert_one({
+            "email": email,
+            "password_hash": hash_password(payload.password),
+            "name": client.get("name"),
+            "role": "client",
+            "client_id": cid,
+            "permissions": [],
+            "status": "active",
+            "created_at": _now(),
+            "updated_at": _now(),
+        })
+
+    await _audit(db, user, "update", "client", cid, client.get("name"),
+                 changes={"portal_login": email})
+    return {"enabled": True, "email": email}
+
+
+@router.delete("/clients/{cid}/portal")
+async def delete_client_portal(cid: str, request: Request, db=Depends(get_db)):
+    user = await get_current_user(request, db)
+    require_permission(user, "dispatch.clients.edit")
+    client = await db.dispatch_clients.find_one({"_id": _oid(cid)})
+    if not client:
+        raise HTTPException(404, "Client not found")
+    await db.users.delete_one({"role": "client", "client_id": cid})
+    await _audit(db, user, "update", "client", cid, client.get("name"),
+                 changes={"portal_login": "removed"})
+    return {"enabled": False}
 
 
 # =====================================================================

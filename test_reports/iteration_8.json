@@ -1,0 +1,37 @@
+{
+  "summary": "Full backend + frontend testing of new Client Login Portal + Vendor→Client linking on OfficeFlow. All 12 backend pytest tests passed (100%). All frontend flows verified end-to-end: admin login unchanged, portal chooser works, Add Vendor 'Linked Clients' multi-select present with per-client checkboxes, Clients page shows key icon per row that opens the Client Portal Login dialog with correct data-testids. Client login (acme@client.com) auto-redirects to /client, renders client-dashboard, and correctly ISOLATES data — /client/vendors shows only 'Vendor One' + 'Vendor Both' (linked to Acme Corp) and does NOT show 'Vendor Two' (Globex only). Client sidebar navigation (Dashboard, Vendors, Schedules, Reports) works. A client attempting /dashboard is redirected to /client. Backend enforces isolation: client gets 403 on /api/dispatch/vendors, /api/dispatch/clients, /api/dispatch/schedules; admin gets 403 on /api/portal/*. /api/portal/schedules never returns financial fields (duty_rate, billing_rate, work_order_number).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/auth/me", "issue": "For role='client' users, response does not expose 'client_id' field. Not a blocker (frontend has role-based routing and portal endpoints resolve client_id server-side), but exposing it on /auth/me would help debugging and any future client-scoped frontend logic outside /portal/*."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_client_portal.py",
+    "/app/test_reports/pytest/client_portal.xml"
+  ],
+  "action_items": [
+    "(Optional) Include 'client_id' in /api/auth/me user response when role=='client' for consistency."
+  ],
+  "critical_code_review_comments": [
+    "client_portal.py: /portal/vendors search branch pops 'client_ids' out of q, then puts an $and that still enforces cid — correct behaviour retained.",
+    "dispatch.py PUT /clients/{cid}/portal: email uniqueness check is properly scoped to exclude the client's own account; password kept if not supplied (good UX).",
+    "models/dispatch.py: VendorBase.client_ids is Optional[List[str]] with no default value distinction between 'not provided' and 'empty list'; update endpoint filters `v is not None`, so PUT with client_ids=[] will actually clear the list (works, but worth documenting).",
+    "portal_schedules(): financial fields stripped via _strip_financial — verified in test.",
+    "No pagination on GET /portal/vendors (hard-coded limit(500)). Acceptable for MVP but should be paginated if any client has many vendors."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_client_portal.py (new)"
+  ],
+  "success_rate": {"backend": "100% (12/12)", "frontend": "100%"},
+  "test_credentials": "Admin: admin@example.com / admin123 ; Client: acme@client.com / Acme@123",
+  "seed_data_creation": "Existing seed used (Acme Corp, Globex Ltd, Vendor One/Two/Both). No new seed data created.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "New pytest file at /app/backend/tests/test_client_portal.py covers vendor client_ids CRUD, portal/me, /summary, /vendors isolation, /schedules (no financial leak), /reports, and 403 enforcement in both directions. Run with: pytest /app/backend/tests/test_client_portal.py -v -o addopts= . Frontend data-testids verified: client-dashboard, client-nav-vendors, client-nav-schedules, client-nav-reports, field-client_ids, client-option-<id>, portal-login-<clientId>, portal-email-input, portal-password-input, save-portal-login, portal-select-dispatch."
+}

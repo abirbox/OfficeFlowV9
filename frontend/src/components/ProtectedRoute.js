@@ -3,7 +3,7 @@ import useAuthStore from '@/stores/authStore';
 import { useEffect } from 'react';
 
 const ProtectedRoute = ({ children }) => {
-  const { isAuthenticated, isLoading, checkAuth } = useAuthStore();
+  const { isAuthenticated, isLoading, user, checkAuth } = useAuthStore();
   const location = useLocation();
 
   useEffect(() => {
@@ -23,6 +23,11 @@ const ProtectedRoute = ({ children }) => {
 
   if (!isAuthenticated) {
     return <Navigate to="/login" state={{ from: location }} replace />;
+  }
+
+  // Clients belong to the dedicated Client Portal, never the admin dashboard.
+  if (user?.role === 'client') {
+    return <Navigate to="/client" replace />;
   }
 
   return children;

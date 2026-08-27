@@ -31,6 +31,7 @@ class UserResponse(BaseModel):
     phone: Optional[str] = None
     avatar_path: Optional[str] = None
     company_id: Optional[str] = None
+    client_id: Optional[str] = None
     branch_id: Optional[str] = None
     department_id: Optional[str] = None
     designation_id: Optional[str] = None

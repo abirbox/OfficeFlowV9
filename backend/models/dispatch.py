@@ -40,6 +40,7 @@ class VendorBase(BaseModel):
     code: Optional[str] = None
     name: str
     logo_path: Optional[str] = None
+    client_ids: Optional[List[str]] = None  # Clients this Vendor serves
     contact_person: Optional[str] = None
     contact_number: Optional[str] = None
     website: Optional[str] = None
@@ -55,6 +56,7 @@ class VendorUpdate(BaseModel):
     code: Optional[str] = None
     name: Optional[str] = None
     logo_path: Optional[str] = None
+    client_ids: Optional[List[str]] = None
     contact_person: Optional[str] = None
     contact_number: Optional[str] = None
     website: Optional[str] = None
@@ -263,3 +265,9 @@ class PayslipRecordCreate(BaseModel):
     date_to: str
     extra_payments: Optional[List[PayslipLine]] = None
     deductions: Optional[List[PayslipLine]] = None
+
+
+# ---------- Client Portal login credentials ----------
+class ClientPortalCredentials(BaseModel):
+    email: EmailStr
+    password: Optional[str] = None  # optional on update (blank = keep current)
